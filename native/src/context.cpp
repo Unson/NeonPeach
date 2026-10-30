@@ -198,7 +198,7 @@ void Context::runPass(int n, int off, float* const* out, int outN){
   for(int c = 0; c < outN; c++){ float* o = out[c] + off;
     if(dest && dest->pass == passNo && c < dest->ins[0]->bus.ch && !dest->ins[0]->bus.silent) std::memcpy(o, dest->ins[0]->bus.d[c], sizeof(float)*n);
     else std::memset(o, 0, sizeof(float)*n); }
-  frame += n; framePub.store(frame, std::memory_order_release);
+  frame += n; framePub.store(frame, std::memory_order_release); nodeCount.store((int)nodes.size(), std::memory_order_relaxed);
   if((passNo & 63) == 0) sweep();
 }
 

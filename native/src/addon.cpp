@@ -122,7 +122,7 @@ private:
     std::vector<OutMsg> msgs; cx->drainMessages(msgs);
     auto o = Napi::Object::New(env); o.Set("frame", Napi::Number::New(env, (double)cx->framePub.load())); o.Set("sampleRate", Napi::Number::New(env, cx->sr));
     o.Set("wall", Napi::Number::New(env, (double)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()/1000.0));
-    o.Set("xruns", Napi::Number::New(env, cx->xruns.load()));
+    o.Set("xruns", Napi::Number::New(env, cx->xruns.load())); o.Set("nodes", Napi::Number::New(env, cx->nodeCount.load()));
     auto a = Napi::Array::New(env, msgs.size()); for(size_t i = 0; i < msgs.size(); i++){ auto m = Napi::Array::New(env, 2); m.Set(0u, Napi::Number::New(env, msgs[i].id)); m.Set(1u, fromValue(env, msgs[i].v)); a.Set((uint32_t)i, m); }
     o.Set("msgs", a);
     if(!errors.empty()){ auto e = Napi::Array::New(env, errors.size()); for(size_t i = 0; i < errors.size(); i++) e.Set((uint32_t)i, Napi::String::New(env, errors[i])); o.Set("errors", e); errors.clear(); }
@@ -169,8 +169,10 @@ private:
     Napi::Env env = info.Env(); stop(); auto o = info[0].As<Napi::Object>(); auto res = Napi::Object::New(env);
     std::string a = o.Has("api") ? o.Get("api").ToString().Utf8Value() : ""; double rate = o.Has("rate") ? o.Get("rate").ToNumber().DoubleValue() : 48000; unsigned buf = o.Has("buffer") ? o.Get("buffer").ToNumber().Uint32Value() : 128;
     fakeIn = o.Has("fakeInput") && o.Get("fakeInput").ToBoolean().Value();
+    // keep the graph when the rate stays the same: only the device changes
+    auto keepOrMake = [&](double r, int oc){ if(!cx || std::fabs(cx->sr - r) > 0.5){ makeContext(r, oc, 2); res.Set("fresh", true); } else { cx->outCh = oc; res.Set("fresh", false); } };
     if(a == "null"){
-      makeContext(rate, 2, 2); outN = 2; inN = 2; streamSr = rate; bufFrames = buf; outLat = inLat = buf/rate; api = "null"; devName = "No device (silent)";
+      keepOrMake(rate, 2); outN = 2; inN = 2; streamSr = rate; bufFrames = buf; outLat = inLat = buf/rate; api = "null"; devName = "No device (test mode)";
       nullRun = true; nullThread = std::thread([this, buf]{ std::vector<float> ob(buf*2); auto next = std::chrono::steady_clock::now();
         while(nullRun){ callback(ob.data(), nullptr, buf, 0, 0, this); next += std::chrono::microseconds((int64_t)(1e6*buf/streamSr)); std::this_thread::sleep_until(next); } });
       res.Set("ok", true); fill(res); return res; }
@@ -184,11 +186,11 @@ private:
     RtAudio::StreamParameters op, ip; op.deviceId = outId; op.nChannels = std::max(1u, std::min(8u, di.outputChannels)); op.firstChannel = 0;
     unsigned avail = ii.inputChannels > firstIn ? ii.inputChannels - firstIn : 0; ip.deviceId = inId; ip.nChannels = std::min(2u, avail); ip.firstChannel = firstIn;
     RtAudio::StreamOptions so; so.flags = RTAUDIO_NONINTERLEAVED | RTAUDIO_MINIMIZE_LATENCY | RTAUDIO_SCHEDULE_REALTIME; so.priority = 90; so.streamName = "Neon Peach";
-    makeContext(rate, (int)op.nChannels, 2); outN = (int)op.nChannels; inN = (int)ip.nChannels;
+    keepOrMake(rate, (int)op.nChannels); outN = (int)op.nChannels; inN = (int)ip.nChannels;
     unsigned frames = buf;
     RtAudioErrorType err = rt->openStream(&op, ip.nChannels ? &ip : nullptr, RTAUDIO_FLOAT32, (unsigned)rate, &frames, &Engine::callback, this, &so);
     if(err != RTAUDIO_NO_ERROR){ res.Set("ok", false); res.Set("error", rt->getErrorText()); rt.reset(); return res; }
-    streamSr = rt->getStreamSampleRate(); bufFrames = frames;
+    streamSr = rt->getStreamSampleRate(); bufFrames = frames; if(std::fabs(streamSr - cx->sr) > 0.5){ makeContext(streamSr, outN, 2); res.Set("fresh", true); }
     if(rt->startStream() != RTAUDIO_NO_ERROR){ res.Set("ok", false); res.Set("error", rt->getErrorText()); rt->closeStream(); rt.reset(); return res; }
     long lat = rt->getStreamLatency(); api = a; devName = di.name;
     // RtAudio reports total buffering; split it as the device does: about half in, half out

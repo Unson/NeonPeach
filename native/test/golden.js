@@ -47,8 +47,9 @@ const SKIP = new Set(['clone', 'capture', 'fxloop', 'auxsend']);
       const r = await c.startRendering(); return [Array.from(r.getChannelData(0)), Array.from(r.getChannelData(1))]; }, {type, sig, N, SR}) : runNative(type);
     let e = 0, p = 0, mx = 0; for(let c = 0; c < 2; c++) for(let i = 0; i < N; i++){ const d = ref[c][i] - nat[c][i]; e += d*d; p += ref[c][i]*ref[c][i]; mx = Math.max(mx, Math.abs(d)); }
     const snr = p > 0 ? 10*Math.log10(p/(e + 1e-30)) : (e < 1e-12 ? Infinity : -Infinity);
-    rows.push([type, snr, mx, Math.sqrt(p/(2*N))]);
-    console.log(type.padEnd(10), (isFinite(snr) ? snr.toFixed(1) : String(snr)).padStart(7) + ' dB', ' max diff ' + mx.toExponential(2), ' level ' + Math.sqrt(p/(2*N)).toFixed(3));
+    let q = 0; for(let c = 0; c < 2; c++) for(let i = 0; i < N; i++) q += nat[c][i]*nat[c][i]; const lv = 20*Math.log10(Math.sqrt(q/(2*N))/Math.sqrt(p/(2*N)));
+    rows.push([type, snr, mx, Math.sqrt(p/(2*N)), lv]);
+    console.log(type.padEnd(10), (isFinite(snr) ? snr.toFixed(1) : String(snr)).padStart(7) + ' dB', ' max diff ' + mx.toExponential(2), ' level ' + Math.sqrt(p/(2*N)).toFixed(3), ' native vs chrome ' + lv.toFixed(2) + ' dB');
   }
   fs.writeFileSync(path.join(__dirname, 'golden-results.json'), JSON.stringify(rows));
   await browser.close();

@@ -136,6 +136,25 @@ ipcMain.on('np:keep-awake', (_e, on) => {
   if(on && awakeId == null) awakeId = powerSaveBlocker.start('prevent-app-suspension');
   else if(!on && awakeId != null){ powerSaveBlocker.stop(awakeId); awakeId = null; } });
 ipcMain.on('np:ready', () => { rendererReady = true; flushFiles(); });
+
+// ---------- the native audio engine (C++): ASIO / Core Audio / WASAPI, no browser audio in the way ----------
+let NAT = null, natEng = null, natTimer = null, natLast = 0, natErr = '';
+function natLib(){
+  if(NAT || natErr) return NAT;
+  const dir = app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native');
+  const f = path.join(dir, process.platform + '-' + process.arch, 'npaudio.node');
+  try{ NAT = require(f); }catch(e){ natErr = String(e && e.message || e); }
+  return NAT; }
+ipcMain.handle('np:nat-info', () => { const L = natLib(); if(!L) return {available: false, error: natErr};
+  let devices = []; try{ devices = L.devices(); }catch(e){} return {available: true, devices, platform: process.platform}; });
+ipcMain.handle('np:nat-open', (_e, cfg) => { const L = natLib(); if(!L) return {ok: false, error: natErr || 'The native engine is not here.'};
+  try{ if(!natEng) natEng = new L.Engine({sampleRate: (cfg && cfg.rate) || 48000, outChannels: 2});
+    const r = natEng.open(cfg || {}); startNatPoll(); return r; }catch(e){ return {ok: false, error: String(e && e.message || e)}; } });
+ipcMain.on('np:nat-cmd', (_e, ops) => { if(natEng) try{ natEng.cmd(ops); }catch(e){ console.error(e); } });
+ipcMain.handle('np:nat-close', () => { if(natEng) try{ natEng.close(); }catch(e){} return true; });
+function startNatPoll(){ if(natTimer) return; natTimer = setInterval(() => { if(!natEng || !win || win.isDestroyed()) return; let pk; try{ pk = natEng.poll(); }catch(e){ return; }
+  const t = Date.now(); if(pk.msgs.length || pk.errors || t - natLast > 20){ natLast = t; win.webContents.send('np:nat-pk', pk); } }, 5); }
+app.on('will-quit', () => { if(natTimer) clearInterval(natTimer); if(natEng) try{ natEng.close(); }catch(e){} });
 ipcMain.handle('np:get-settings', () => ({exclusiveAudio: !!SETTINGS.exclusiveAudio}));
 ipcMain.handle('np:set-settings', (_e, s) => { s = s || {}; if('exclusiveAudio' in s) setExclusive(!!s.exclusiveAudio, s.relaunch !== false); return true; });
 function setExclusive(on, relaunch = true){ if(!relaunch){ SETTINGS.exclusiveAudio = !!on; writeSettings(SETTINGS); return; }

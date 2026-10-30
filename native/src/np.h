@@ -71,6 +71,7 @@ public:
   std::vector<std::pair<Node*, int>> in;     // audio-rate connections into this param
   // results for this pass
   float vals[MAXQ]; bool varying = false; float first = 0;
+  double tgtTime = -1; float tgtVal = 0; int64_t tgtFrame = -1;   // running state of the current setTarget glide (Chromium steps it in float)
   void setValue(float v, double now);
   void add(Event e);
   void cancel(double t);
@@ -143,7 +144,7 @@ public:
   std::vector<int> trashAudio();             // free nodes the audio thread let go of (page thread); returns their ids
   void postFromPage(int id, ValueP v);       // a message to the page, sent from the page thread
   std::atomic<int64_t> framePub{0};          // frames rendered, readable from any thread
-  std::atomic<int> xruns{0};
+  std::atomic<int> xruns{0}; std::atomic<int> nodeCount{0};
   std::vector<std::shared_ptr<void>> garbage; std::mutex gm;   // freed on the page thread
 
   // used on the audio thread

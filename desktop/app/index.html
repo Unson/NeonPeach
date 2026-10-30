@@ -3285,7 +3285,10 @@ def('limiter', { name:'Brickwall', cat:'Dynamics', color:'#8ef',
 });
 
 // --- Drive (shared builder) ---
-function buildDrive(ctx,b){ const n=b.n; n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.hp.Q.value=0.7; n.att=ctx.createBiquadFilter(); n.att.type='highshelf'; n.att.frequency.value=2800; n.sh=shaperNode(ctx); n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.Q.value=0.6; n.tone=ctx.createBiquadFilter(); n.tone.type='peaking'; n.tone.frequency.value=800; n.tone.Q.value=0.8; n.lvl=ctx.createGain(); n.dry=ctx.createGain(); n.dd=ctx.createDelay(0.01); n.dd.delayTime.value=SHAPER_LAT/ctx.sampleRate;
+const DRIVE_SHAPE={b3k:'micro',vintage:'vintage',alpha:'alpha',omega:'omega',ignis:'fuzz',od:'od',fold:'fold',tubepre:'tube',octfuzz:'rect'};
+// the drive starts with its real curve, so there is no first moment with the wrong sound
+function initCurve(node, shape, amt){ node._ck=shape+':'+amt; return node; }
+function buildDrive(ctx,b){ const n=b.n; n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.hp.Q.value=0.7; n.att=ctx.createBiquadFilter(); n.att.type='highshelf'; n.att.frequency.value=2800; { const sh=DRIVE_SHAPE[b.type]||'od'; n.sh=initCurve(shaperNode(ctx, makeCurve(sh, b.p.drive/100)), sh, b.p.drive); } n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.Q.value=0.6; n.tone=ctx.createBiquadFilter(); n.tone.type='peaking'; n.tone.frequency.value=800; n.tone.Q.value=0.8; n.lvl=ctx.createGain(); n.dry=ctx.createGain(); n.dd=ctx.createDelay(0.01); n.dd.delayTime.value=SHAPER_LAT/ctx.sampleRate;
   n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12; n.dc.Q.value=0.5;   // the curve can make DC; this takes it out
   b.wetIn.connect(n.hp).connect(n.att).connect(n.sh).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); b.wetIn.connect(n.dd).connect(n.dry).connect(b.wetOut); }
 function applyDrive(b, shape){ const n=b.n,p=b.p; n.hp.frequency.value=p.grunt; n.att.gain.value=p.attack; setCurve(n.sh, shape+':'+p.drive, ()=>makeCurve(shape, p.drive/100)); n.lp.frequency.value=p.highcut; n.tone.gain.value=p.tone||0; const bl=p.blend/100; setP(n.lvl.gain,dB(p.level)*Math.sin(bl*Math.PI/2)*0.5); setP(n.dry.gain,Math.cos(bl*Math.PI/2)); }
@@ -3305,7 +3308,7 @@ const AMPS = { 'SVT Classic':{shape:'tube', lo:80, mid:500, hi:3000, pres:5000, 
 const AMP_NAMES=Object.keys(AMPS);
 def('amp', { name:'Amp Head', cat:'Amp', color:'#fc6',
   params:{ model:E('Model',AMP_NAMES,0), gain:P('Gain',0,100,35,'%'), bass:P('Bass',-12,12,0,'dB'), mid:P('Mid',-12,12,0,'dB'), midf:P('Mid Freq',200,2000,500,'Hz'), treble:P('Treble',-12,12,0,'dB'), presence:P('Presence',-12,12,0,'dB'), master:P('Master',-24,12,0,'dB'), sag:P('Sag',0,100,40,'%') },
-  build(ctx,b){ const n=b.n; n.g=ctx.createGain(); n.sag=compNode(ctx); n.sag.parameters.get('knee').value=10; n.sag.parameters.get('attack').value=5; n.sag.parameters.get('release').value=150; n.sag.parameters.get('auto').value=1; n.sh=shaperNode(ctx); n.lo=ctx.createBiquadFilter(); n.lo.type='lowshelf'; n.mid=ctx.createBiquadFilter(); n.mid.type='peaking'; n.mid.Q.value=0.9; n.hi=ctx.createBiquadFilter(); n.hi.type='highshelf'; n.pr=ctx.createBiquadFilter(); n.pr.type='highshelf'; n.m=ctx.createGain();
+  build(ctx,b){ const n=b.n; n.g=ctx.createGain(); n.sag=compNode(ctx); n.sag.parameters.get('knee').value=10; n.sag.parameters.get('attack').value=5; n.sag.parameters.get('release').value=150; n.sag.parameters.get('auto').value=1; { const m=AMPS[AMP_NAMES[b.p.model]]||AMPS['SVT Classic']; n.sh=initCurve(shaperNode(ctx, makeCurve(m.shape, b.p.gain/100*0.8)), m.shape, b.p.gain); } n.lo=ctx.createBiquadFilter(); n.lo.type='lowshelf'; n.mid=ctx.createBiquadFilter(); n.mid.type='peaking'; n.mid.Q.value=0.9; n.hi=ctx.createBiquadFilter(); n.hi.type='highshelf'; n.pr=ctx.createBiquadFilter(); n.pr.type='highshelf'; n.m=ctx.createGain();
     b.wetIn.connect(n.g).connect(n.sag).connect(n.sh).connect(n.lo).connect(n.mid).connect(n.hi).connect(n.pr).connect(n.m).connect(b.wetOut); },
   apply(b){ const n=b.n,p=b.p,m=AMPS[AMP_NAMES[p.model]]; setP(n.g.gain,1); setCurve(n.sh, m.shape+':'+p.gain, ()=>makeCurve(m.shape, p.gain/100*0.8)); wp(n.sag,'threshold',-30+(1-p.sag/100)*30); wp(n.sag,'ratio',1+m.sag*p.sag/100*6); n.lo.frequency.value=m.lo; n.lo.gain.value=p.bass; n.mid.frequency.value=p.midf; n.mid.gain.value=p.mid; n.hi.frequency.value=m.hi; n.hi.gain.value=p.treble; n.pr.frequency.value=m.pres; n.pr.gain.value=p.presence; setP(n.m.gain,dB(p.master)*0.6); }
 });
@@ -3666,7 +3669,7 @@ function shDelay(ctx){ const d=ctx.createDelay(0.01); d.delayTime.value=SHAPER_L
 def('mbdrive', { name:'Split Grind', cat:'Drive', desc:'Lows stay clean and tight. Highs get the dirt.',
   params:{ xo:P('Split at',80,600,250,'Hz'), drive:P('Drive',0,100,60,'%'), shape:E('Flavor',['Micro','Alpha','Omega','Fuzz'],1), lows:P('Lows',-24,12,0,'dB'), highs:P('Highs',-24,12,-2,'dB'), squeeze:P('Low Squeeze',0,100,40,'%'), attack:P('Attack',-6,12,4,'dB'), mid:P('Mids',-12,12,2,'dB'), highcut:P('High Cut',1500,12000,6000,'Hz') },
   build(ctx,b){ const n=b.n; n.lp=lr4(ctx,'lowpass',250); n.hp=lr4(ctx,'highpass',250); n.ld=shDelay(ctx); n.lc=compNode(ctx); n.lg=ctx.createGain();
-    n.att=ctx.createBiquadFilter(); n.att.type='highshelf'; n.att.frequency.value=2800; n.sh=shaperNode(ctx); n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12; n.cut=ctx.createBiquadFilter(); n.cut.type='lowpass'; n.cut.Q.value=0.6; n.md=ctx.createBiquadFilter(); n.md.type='peaking'; n.md.frequency.value=900; n.md.Q.value=0.8; n.hg=ctx.createGain();
+    n.att=ctx.createBiquadFilter(); n.att.type='highshelf'; n.att.frequency.value=2800; { const sh=['micro','alpha','omega','fuzz'][b.p.shape|0]; n.sh=initCurve(shaperNode(ctx, makeCurve(sh, b.p.drive/100)), sh, b.p.drive); } n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12; n.cut=ctx.createBiquadFilter(); n.cut.type='lowpass'; n.cut.Q.value=0.6; n.md=ctx.createBiquadFilter(); n.md.type='peaking'; n.md.frequency.value=900; n.md.Q.value=0.8; n.hg=ctx.createGain();
     n.lc.parameters.get('attack').value=15; n.lc.parameters.get('release').value=150; n.lc.parameters.get('knee').value=6;
     b.wetIn.connect(n.lp.i); n.lp.o.connect(n.ld).connect(n.lc).connect(n.lg).connect(b.wetOut);
     b.wetIn.connect(n.hp.i); n.hp.o.connect(n.att).connect(n.sh).connect(n.dc).connect(n.cut).connect(n.md).connect(n.hg).connect(b.wetOut); },
@@ -3676,7 +3679,7 @@ def('mbdrive', { name:'Split Grind', cat:'Drive', desc:'Lows stay clean and tigh
 // --- Peach Muff: a big wall of fuzz with the scooped tone knob ---
 def('muff', { name:'Peach Muff', cat:'Drive', desc:'Thick fuzz. Tone sweeps from dark to bright, with a mid scoop.',
   params:{ sustain:P('Sustain',0,100,70,'%'), tone:P('Tone',0,100,50,'%'), mids:P('Mids',-12,12,0,'dB'), blend:P('Blend',0,100,70,'%'), level:P('Level',-24,24,0,'dB'), grunt:P('Grunt',30,300,60,'Hz') },
-  build(ctx,b){ const n=b.n; n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.sh=shaperNode(ctx); n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12;
+  build(ctx,b){ const n=b.n; n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.sh=initCurve(shaperNode(ctx, makeCurve('muff',0.2+b.p.sustain/100*0.8)), 'muff', b.p.sustain); n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12;
     n.tl=ctx.createBiquadFilter(); n.tl.type='lowpass'; n.tl.frequency.value=650; n.th=ctx.createBiquadFilter(); n.th.type='highpass'; n.th.frequency.value=1100; n.gl=ctx.createGain(); n.gh=ctx.createGain(); n.md=ctx.createBiquadFilter(); n.md.type='peaking'; n.md.frequency.value=900; n.md.Q.value=0.7; n.lvl=ctx.createGain(); n.dd=shDelay(ctx); n.dry=ctx.createGain();
     b.wetIn.connect(n.hp).connect(n.sh).connect(n.dc); n.dc.connect(n.tl).connect(n.gl).connect(n.md); n.dc.connect(n.th).connect(n.gh).connect(n.md); n.md.connect(n.lvl).connect(b.wetOut); b.wetIn.connect(n.dd).connect(n.dry).connect(b.wetOut); },
   apply(b){ const n=b.n,p=b.p; n.hp.frequency.value=p.grunt; setCurve(n.sh,'muff:'+p.sustain,()=>makeCurve('muff',0.2+p.sustain/100*0.8)); const t=p.tone/100; setP(n.gl.gain,1-t); setP(n.gh.gain,t*1.6); n.md.gain.value=p.mids; const bl=p.blend/100; setP(n.lvl.gain,dB(p.level)*Math.sin(bl*Math.PI/2)*0.7); setP(n.dry.gain,Math.cos(bl*Math.PI/2)); } });
@@ -5163,8 +5166,9 @@ function matchBars(g){ return `<section class="pane"><h4 class="pane-h">Your mat
 PAGE_RENDER.io=()=>{ const ins=(UI.devices||[]).filter(d=>d.kind==='audioinput'), outs=(UI.devices||[]).filter(d=>d.kind==='audiooutput');
   const opt=(list,cur,dflt)=>`<option value="">${dflt}</option>`+list.filter(d=>d.deviceId&&d.deviceId!=='default').map((d,i)=>`<option value="${esc(d.deviceId)}" ${cur===d.deviceId?'selected':''}>${esc(d.label||('Device '+(i+1)))}</option>`).join('');
   const ctx=NP.ctx; const lat=((ctx.baseLatency||0)+(ctx.outputLatency||0))*1000; const bl=UI.btLevel??70;
-  return `<div class="grid2">${latencyPane()}<section class="pane span2"><h4 class="pane-h">Audio devices</h4><div class="grid2"><div class="field wide"><label for="indev">Input</label><select id="indev">${opt(ins,UI.io.inputId,'System default')}</select></div><div class="field wide"><label for="outdev">Output</label><select id="outdev" ${ctx.setSinkId?'':'disabled'}>${opt(outs,UI.io.outputId,'System default')}</select></div></div>
-  <div class="chips"><span class="ichip ${UI.inputOk?'ok':'bad'}"><i class="ldot"></i>${UI.inputOk?'Input open':'No input'}</span><span class="ichip ${ctx.state==='running'?'ok':'bad'}"><i class="ldot"></i>Engine ${ctx.state==='running'?'running':ctx.state}</span><span class="ichip">${icon('wave')}${trimNum((ctx.sampleRate/1000).toFixed(1))} kHz</span><span class="ichip">${icon('clock')}Output ${lat.toFixed(1)} ms</span><span class="ichip">${outChannels()} outputs</span><button class="sm" id="devrefresh">${icon('refresh')}Refresh list</button></div></section>
+  const devSection = typeof nativeDeviceSection==='function' && UI.native ? nativeDeviceSection() : `<section class="pane span2"><h4 class="pane-h">Audio devices</h4><div class="grid2"><div class="field wide"><label for="indev">Input</label><select id="indev">${opt(ins,UI.io.inputId,'System default')}</select></div><div class="field wide"><label for="outdev">Output</label><select id="outdev" ${ctx.setSinkId?'':'disabled'}>${opt(outs,UI.io.outputId,'System default')}</select></div></div>
+  <div class="chips"><span class="ichip ${UI.inputOk?'ok':'bad'}"><i class="ldot"></i>${UI.inputOk?'Input open':'No input'}</span><span class="ichip ${ctx.state==='running'?'ok':'bad'}"><i class="ldot"></i>Engine ${ctx.state==='running'?'running':ctx.state}</span><span class="ichip">${icon('wave')}${trimNum((ctx.sampleRate/1000).toFixed(1))} kHz</span><span class="ichip">${icon('clock')}Output ${lat.toFixed(1)} ms</span><span class="ichip">${outChannels()} outputs</span><button class="sm" id="devrefresh">${icon('refresh')}Refresh list</button></div>${typeof nativeOffer==='function'?nativeOffer():''}</section>`;
+  return `<div class="grid2">${latencyPane()}${devSection}
   <section class="pane"><h4 class="pane-h">Input level</h4><div class="field wide"><label>Your bass is in</label><div class="seg sm" role="group" aria-label="Input jack">${['Input 1','Input 2','Both'].map((t,i)=>`<button class="${(NP.globals.inCh|0)===i?'on':''}" data-inch="${i}" aria-pressed="${(NP.globals.inCh|0)===i}">${t}</button>`).join('')}</div></div><p class="dim" style="margin:4px 0 10px">Pick the jack your bass is plugged into. The bass is mono, so Neon Peach plays it on both sides.</p><div class="fields">${field('Gain','ingain',-24,24,0.5,NP.globals.inGain,fmtDb(NP.globals.inGain))}</div><label class="tgl"><input type="checkbox" id="inpad" ${NP.globals.pad?'checked':''}><span>−6 dB pad, for hot basses</span></label></section>
   <section class="pane"><h4 class="pane-h">Demo riff</h4><p class="dim" style="margin-bottom:12px">A built-in bass riff. Use it to try sounds with no bass plugged in.</p><button class="${UI.demoOn?'on':''}" id="demo">${icon(UI.demoOn?'stop':'play')}${UI.demoOn?'Stop the demo riff':'Play the demo riff'}</button></section>
   <section class="pane"><h4 class="pane-h">Backing track<em>${UI.btName?esc(UI.btName):'No file loaded'}</em></h4><div class="row wrap"><button class="sm" id="btload">${icon('file')}Load a file</button><button class="sm ${UI.btPlaying?'on':''}" id="btplay">${icon(UI.btPlaying?'stop':'play')}${UI.btPlaying?'Stop':'Play'}</button></div><div class="fields" style="margin-top:8px">${field('Level','btlvl',0,100,1,bl,bl+'%',false,true)}</div></section>
@@ -6105,6 +6109,276 @@ function v2Start(){ drLoad(); v2Upgrade();
   if(window.npDesktop && UI.appSet===null){ setTimeout(v2Watch, 1500); } else v2Watch(); }
 function v2Watch(){ if(!(window.npDesktop&&npDesktop.setSettings&&UI.appSet&&UI.appSet.exclusiveAudio)) return; const t0=NP.ctx.currentTime;
   setTimeout(()=>{ if(NP.ctx.currentTime-t0<0.5){ toast('Exclusive audio did not start on this device. Switching it off and restarting.', 5000); setTimeout(()=>npDesktop.setSettings({exclusiveAudio:false, relaunch:true}), 2500); } }, 3000); }
+
+// Neon Peach: a Web Audio stand-in that sends every call to the native engine.
+// The app's code builds its graphs exactly as it does in a browser. Nothing in the app has to change.
+// transport: { send(ops) }  and the creator calls ctx._receive(packet) with {frame, sampleRate, wall, msgs}.
+(function(root){
+'use strict';
+function makeNativeAudio(transport, info){
+  info = info || {};
+  const ops = []; let queued = false, nextId = 10;
+  const flush = () => { queued = false; if(ops.length) transport.send(ops.splice(0)); };
+  const op = (a) => { ops.push(a); if(!queued){ queued = true; (root.queueMicrotask || ((f) => Promise.resolve().then(f)))(flush); } };
+  const live = new Map();                 // id -> WeakRef(node), for messages
+  const reg = typeof FinalizationRegistry !== 'undefined' ? new FinalizationRegistry((id) => { live.delete(id); op(['r', id]); }) : null;
+  const descs = {};                       // worklet name -> parameterDescriptors
+
+  // ---------------------------------------------------------------- params
+  class NParam {
+    constructor(node, name, def, min, max){ this._n = node; this._name = name; this._v = def; this.defaultValue = def; this.minValue = min; this.maxValue = max; this.automationRate = 'a-rate'; }
+    get value(){ return this._v; }
+    set value(v){ v = +v; if(!Number.isFinite(v)) return; this._v = v; op(['p', this._n.id, this._name, 'v', v]); }
+    setValueAtTime(v, t){ this._v = +v; op(['p', this._n.id, this._name, 'set', +v, +t]); return this; }
+    linearRampToValueAtTime(v, t){ this._v = +v; op(['p', this._n.id, this._name, 'lin', +v, +t]); return this; }
+    exponentialRampToValueAtTime(v, t){ this._v = +v; op(['p', this._n.id, this._name, 'exp', +v, +t]); return this; }
+    setTargetAtTime(v, t, tc){ this._v = +v; op(['p', this._n.id, this._name, 'tgt', +v, +t, +tc]); return this; }
+    cancelScheduledValues(t){ op(['p', this._n.id, this._name, 'cancel', +t]); return this; }
+    cancelAndHoldAtTime(t){ return this.cancelScheduledValues(t); }
+  }
+
+  // ---------------------------------------------------------------- nodes
+  class NNode {
+    constructor(ctx, type, opts, nin, nout){
+      this.context = ctx; this.id = nextId++; this.numberOfInputs = nin; this.numberOfOutputs = nout;
+      this._cc = 2; this._ccm = 'max'; this._ci = 'speakers'; this._listeners = {};
+      op(['c', this.id, type, opts || {}]); live.set(this.id, new WeakRef(this)); if(reg) reg.register(this, this.id);
+    }
+    connect(dest, output = 0, input = 0){
+      if(dest instanceof NParam) op(['xp', this.id, output | 0, dest._n.id, dest._name]);
+      else if(dest && dest.id != null) op(['x', this.id, output | 0, dest.id, input | 0]);
+      else throw new TypeError('connect: not a node');
+      return dest; }
+    disconnect(a, b, c){
+      if(a === undefined) op(['dx', this.id, -1, 0, -1]);
+      else if(typeof a === 'number') op(['dx', this.id, a, 0, -1]);
+      else if(a instanceof NParam) op(['dx', this.id, b == null ? -1 : b, a._n.id, -1, a._name]);
+      else op(['dx', this.id, b == null ? -1 : b, a.id, c == null ? -1 : c]); }
+    get channelCount(){ return this._cc; } set channelCount(v){ this._cc = v | 0; op(['pr', this.id, 'channelCount', v | 0]); }
+    get channelCountMode(){ return this._ccm; } set channelCountMode(v){ this._ccm = v; op(['pr', this.id, 'channelCountMode', String(v)]); }
+    get channelInterpretation(){ return this._ci; } set channelInterpretation(v){ this._ci = v; op(['pr', this.id, 'channelInterpretation', String(v)]); }
+    addEventListener(t, f){ (this._listeners[t] = this._listeners[t] || []).push(f); }
+    removeEventListener(t, f){ const l = this._listeners[t]; if(l){ const i = l.indexOf(f); if(i >= 0) l.splice(i, 1); } }
+    _emit(t, ev){ const h = this['on' + t]; if(typeof h === 'function') try{ h.call(this, ev); }catch(e){ console.error(e); } (this._listeners[t] || []).slice().forEach(f => { try{ f.call(this, ev); }catch(e){ console.error(e); } }); }
+    _msg(m){ if(m && m.__ended){ this._emit('ended', {type: 'ended', target: this}); } }
+  }
+  const P = (n, name, def, min = -3.4028234663852886e38, max = 3.4028234663852886e38) => (n[name] = new NParam(n, name, def, min, max));
+
+  class NGain extends NNode { constructor(c){ super(c, 'gain', {}, 1, 1); P(this, 'gain', 1); } }
+  class NDelay extends NNode { constructor(c, max){ super(c, 'delay', {maxDelayTime: max == null ? 1 : +max}, 1, 1); P(this, 'delayTime', 0, 0, max == null ? 1 : +max); } }
+  class NBiquad extends NNode { constructor(c){ super(c, 'biquad', {}, 1, 1); this._t = 'lowpass'; P(this, 'frequency', 350, 0, c.sampleRate/2); P(this, 'Q', 1); P(this, 'gain', 0); P(this, 'detune', 0); }
+    get type(){ return this._t; } set type(v){ this._t = v; op(['pr', this.id, 'type', String(v)]); } }
+  class NPanner extends NNode { constructor(c){ super(c, 'panner', {}, 1, 1); this._cc = 2; this._ccm = 'clamped-max'; P(this, 'pan', 0, -1, 1); } }
+  class NShaper extends NNode { constructor(c){ super(c, 'shaper', {}, 1, 1); this._curve = null; this._os = 'none'; }
+    get curve(){ return this._curve; } set curve(v){ this._curve = v; op(['d', this.id, 'curve', v ? [Float32Array.from(v)] : [], c0(this)]); }
+    get oversample(){ return this._os; } set oversample(v){ this._os = v; } }
+  const c0 = (n) => n.context.sampleRate;
+  class NConvolver extends NNode { constructor(c){ super(c, 'convolver', {}, 1, 1); this._buf = null; this._norm = true; this._cc = 2; this._ccm = 'clamped-max'; }
+    get normalize(){ return this._norm; } set normalize(v){ this._norm = !!v; op(['pr', this.id, 'normalize', !!v]); }
+    get buffer(){ return this._buf; } set buffer(b){ this._buf = b; op(['d', this.id, 'buffer', b ? chans(b) : [], b ? b.sampleRate : c0(this)]); } }
+  const chans = (b) => { const a = []; for(let i = 0; i < b.numberOfChannels; i++) a.push(Float32Array.from(b.getChannelData(i))); return a; };
+  class NSched extends NNode {
+    start(when = 0, offset = 0, duration){ const o = {when: +when, offset: +offset}; if(duration != null) o.duration = +duration; op(['pr', this.id, 'start', o]); this._started = true; }
+    stop(when = 0){ op(['pr', this.id, 'stop', {when: +when}]); } }
+  class NOsc extends NSched { constructor(c){ super(c, 'osc', {}, 0, 1); this._t = 'sine'; P(this, 'frequency', 440, -c.sampleRate/2, c.sampleRate/2); P(this, 'detune', 0); }
+    get type(){ return this._t; } set type(v){ this._t = v; op(['pr', this.id, 'type', String(v)]); } }
+  class NBufSrc extends NSched { constructor(c){ super(c, 'bufsrc', {}, 0, 1); this._buf = null; this._loop = false; P(this, 'playbackRate', 1); P(this, 'detune', 0); }
+    get buffer(){ return this._buf; } set buffer(b){ this._buf = b; op(['d', this.id, 'buffer', b ? chans(b) : [], b ? b.sampleRate : c0(this)]); }
+    get loop(){ return this._loop; } set loop(v){ this._loop = !!v; op(['pr', this.id, 'loop', !!v]); } }
+  class NSplit extends NNode { constructor(c, n = 6){ super(c, 'split', {n}, 1, n); this._cc = n; this._ccm = 'explicit'; this._ci = 'discrete'; } }
+  class NMerge extends NNode { constructor(c, n = 6){ super(c, 'merge', {n}, n, 1); this._cc = 1; this._ccm = 'explicit'; } }
+  class NInput extends NNode { constructor(c, stream){ super(c, 'input', {}, 0, 1); this.mediaStream = stream || null; } }
+  class NDest extends NNode {
+    constructor(c){ super(c, 'dest-placeholder', {}, 1, 0); }
+    get maxChannelCount(){ return this.context._outChannels; } }
+
+  // analyser: the engine sends the last samples on request; frequency data is worked out here
+  class NAnalyser extends NNode {
+    constructor(c){ super(c, 'analyser', {}, 1, 1); this._fft = 2048; this.smoothingTimeConstant = 0.8; this.minDecibels = -100; this.maxDecibels = -30; this._snap = new Float32Array(2048); this._ask = 0; this._sm = null; }
+    get fftSize(){ return this._fft; } set fftSize(v){ this._fft = v | 0; this._snap = new Float32Array(this._fft); op(['pr', this.id, 'fftSize', v | 0]); }
+    get frequencyBinCount(){ return this._fft >> 1; }
+    _want(){ const t = Date.now(); if(t - this._ask > 25){ this._ask = t; op(['m', this.id, {cmd: 'snap'}]); } }
+    _msg(m){ if(m && m.snap) this._snap = m.snap; else super._msg(m); }
+    getFloatTimeDomainData(a){ this._want(); const s = this._snap, n = Math.min(a.length, s.length); a.set(s.subarray(s.length - n)); }
+    getByteTimeDomainData(a){ this._want(); const s = this._snap, n = Math.min(a.length, s.length); for(let i = 0; i < n; i++) a[i] = Math.max(0, Math.min(255, Math.round(128*(1 + s[s.length - n + i])))); }
+    _spectrum(){ const N = this._fft, x = this._snap, re = new Float64Array(N), im = new Float64Array(N);
+      for(let i = 0; i < N; i++){ const a = 0.16, w = 0.5*(1 - a) - 0.5*Math.cos(2*Math.PI*i/N) + a/2*Math.cos(4*Math.PI*i/N); re[i] = (x[i] || 0)*w; }
+      for(let i = 1, j = 0; i < N; i++){ let bit = N >> 1; for(; j & bit; bit >>= 1) j ^= bit; j ^= bit; if(i < j){ let t = re[i]; re[i] = re[j]; re[j] = t; } }
+      for(let len = 2; len <= N; len <<= 1){ const ang = -2*Math.PI/len; for(let i = 0; i < N; i += len) for(let k = 0; k < len/2; k++){ const wr = Math.cos(ang*k), wi = Math.sin(ang*k), xr = re[i+k+len/2]*wr - im[i+k+len/2]*wi, xi = re[i+k+len/2]*wi + im[i+k+len/2]*wr; re[i+k+len/2] = re[i+k] - xr; im[i+k+len/2] = im[i+k] - xi; re[i+k] += xr; im[i+k] += xi; } }
+      const B = N >> 1; if(!this._sm || this._sm.length !== B) this._sm = new Float64Array(B); const tau = this.smoothingTimeConstant;
+      for(let k = 0; k < B; k++){ const mag = Math.hypot(re[k], im[k])/N; this._sm[k] = tau*this._sm[k] + (1 - tau)*mag; } return this._sm; }
+    getFloatFrequencyData(a){ this._want(); const s = this._spectrum(); for(let k = 0; k < Math.min(a.length, s.length); k++) a[k] = 20*Math.log10(s[k] + 1e-30); }
+    getByteFrequencyData(a){ this._want(); const s = this._spectrum(), lo = this.minDecibels, hi = this.maxDecibels; for(let k = 0; k < Math.min(a.length, s.length); k++){ const d = 20*Math.log10(s[k] + 1e-30); a[k] = Math.max(0, Math.min(255, Math.floor(255/(hi - lo)*(d - lo)))); } }
+  }
+
+  // AudioWorkletNode: the processor runs natively; its port talks to it
+  class NPort { constructor(n){ this._n = n; this.onmessage = null; this._l = []; }
+    postMessage(m){ op(['m', this._n.id, m]); }
+    addEventListener(t, f){ if(t === 'message') this._l.push(f); } removeEventListener(t, f){ const i = this._l.indexOf(f); if(i >= 0) this._l.splice(i, 1); }
+    start(){} close(){}
+    _deliver(d){ const ev = {data: d, target: this}; if(this.onmessage) try{ this.onmessage(ev); }catch(e){ console.error(e); } this._l.slice().forEach(f => { try{ f(ev); }catch(e){ console.error(e); } }); } }
+  class NWorklet extends NNode {
+    constructor(c, name, options = {}){
+      const d = descs[name]; if(!d) throw new Error('AudioWorkletNode: "' + name + '" is not registered');
+      const po = {}; if(options.processorOptions){ for(const k in options.processorOptions){ const v = options.processorOptions[k]; if(v instanceof ArrayBuffer || ArrayBuffer.isView(v) && !(v instanceof Float32Array)) continue; po[k] = v; } }
+      super(c, 'worklet', {name, outputChannelCount: options.outputChannelCount || null, parameterData: options.parameterData || {}, processorOptions: po}, options.numberOfInputs == null ? 1 : options.numberOfInputs, options.numberOfOutputs == null ? 1 : options.numberOfOutputs);
+      this.port = new NPort(this); const m = new Map();
+      for(const pd of d){ const p = new NParam(this, pd.name, pd.defaultValue == null ? 0 : pd.defaultValue, pd.minValue == null ? -3.4e38 : pd.minValue, pd.maxValue == null ? 3.4e38 : pd.maxValue); if(options.parameterData && pd.name in options.parameterData) p._v = options.parameterData[pd.name]; m.set(pd.name, p); }
+      this.parameters = m; }
+    _msg(m){ if(m && m.__ended) return super._msg(m); this.port._deliver(m); } }
+
+  // ---------------------------------------------------------------- buffers
+  class NBuffer {
+    constructor(o){ this.numberOfChannels = o.numberOfChannels | 0; this.length = o.length | 0; this.sampleRate = +o.sampleRate; this._ch = []; for(let i = 0; i < this.numberOfChannels; i++) this._ch.push(new Float32Array(this.length)); }
+    get duration(){ return this.length/this.sampleRate; }
+    getChannelData(i){ return this._ch[i]; }
+    copyToChannel(src, c, off = 0){ this._ch[c].set(src.subarray(0, this.length - off), off); }
+    copyFromChannel(dst, c, off = 0){ dst.set(this._ch[c].subarray(off, off + dst.length)); } }
+
+  // ---------------------------------------------------------------- the context
+  class NativeAudioContext {
+    constructor(){ this.sampleRate = info.sampleRate || 48000; this._outChannels = info.outChannels || 2; this.baseLatency = info.baseLatency || 0; this.outputLatency = info.outputLatency || 0; this.state = 'running'; this._listeners = {};
+      this._frame = 0; this._perf = nowMs(); this._wallFrame = 0; this.onstatechange = null; this.isNative = true;
+      const self = this; this.audioWorklet = { addModule: async (url) => { const src = await sourceOf(url); collectDescriptors(src); } };
+      this.destination = Object.create(NDest.prototype); Object.assign(this.destination, {context: this, id: 1, numberOfInputs: 1, numberOfOutputs: 0, _cc: 2, _ccm: 'explicit', _ci: 'speakers', _listeners: {}});
+      void self; }
+    get currentTime(){ if(info.offline) return this._frame/this.sampleRate; const t = this._frame/this.sampleRate + Math.max(0, (nowMs() - this._perf)/1000); this._last = Math.max(this._last || 0, t); return this._last; }
+    _receive(pk){ if(pk.frame != null){ this._frame = pk.frame; this._perf = nowMs(); }
+      if(pk.msgs) for(const [id, m] of pk.msgs){ const w = live.get(id); const n = w && w.deref(); if(n) n._msg(m); } }
+    createGain(){ return new NGain(this); }
+    createDelay(max){ return new NDelay(this, max); }
+    createBiquadFilter(){ return new NBiquad(this); }
+    createStereoPanner(){ return new NPanner(this); }
+    createWaveShaper(){ return new NShaper(this); }
+    createConvolver(){ return new NConvolver(this); }
+    createOscillator(){ return new NOsc(this); }
+    createBufferSource(){ return new NBufSrc(this); }
+    createChannelSplitter(n = 6){ return new NSplit(this, n); }
+    createChannelMerger(n = 6){ return new NMerge(this, n); }
+    createAnalyser(){ return new NAnalyser(this); }
+    createMediaStreamSource(stream){ return new NInput(this, stream); }
+    createBuffer(ch, len, sr){ return new NBuffer({numberOfChannels: ch, length: len, sampleRate: sr}); }
+    async decodeAudioData(ab, ok, bad){
+      try{ const OAC = root.OfflineAudioContext || root.webkitOfflineAudioContext; if(!OAC) throw new Error('No decoder here');
+        const real = await new OAC(1, 1, this.sampleRate).decodeAudioData(ab.slice ? ab.slice(0) : ab);
+        const b = this.createBuffer(real.numberOfChannels, real.length, real.sampleRate); for(let c = 0; c < real.numberOfChannels; c++) b.getChannelData(c).set(real.getChannelData(c));
+        if(ok) ok(b); return b; }catch(e){ if(bad) bad(e); throw e; } }
+    async resume(){ this.state = 'running'; } async suspend(){} async close(){ this.state = 'closed'; if(transport.close) transport.close(); }
+    async setSinkId(id){ if(transport.setSinkId) return transport.setSinkId(id); }
+    addEventListener(t, f){ (this._listeners[t] = this._listeners[t] || []).push(f); } removeEventListener(){}
+  }
+  NDest.prototype.connect = NNode.prototype.connect; NDest.prototype.disconnect = NNode.prototype.disconnect;
+  for(const k of ['channelCount', 'channelCountMode', 'channelInterpretation']) Object.defineProperty(NDest.prototype, k, Object.getOwnPropertyDescriptor(NNode.prototype, k));
+
+  const nowMs = () => (root.performance && performance.now) ? performance.now() : Date.now();
+  async function sourceOf(url){
+    if(typeof url !== 'string') return '';
+    if(url.startsWith('data:')){ const i = url.indexOf(','), meta = url.slice(0, i), body = url.slice(i + 1); if(/;base64/.test(meta)){ const bin = atob(body); const u8 = new Uint8Array(bin.length); for(let k = 0; k < bin.length; k++) u8[k] = bin.charCodeAt(k); return new TextDecoder().decode(u8); } return decodeURIComponent(body); }
+    const r = await fetch(url); return r.text(); }
+  function collectDescriptors(src){
+    const found = {};
+    const fake = function(){}; fake.prototype = {};
+    // run the module with a pretend worklet scope; only class definitions and registerProcessor calls happen
+    const fn = new Function('registerProcessor', 'AudioWorkletProcessor', 'sampleRate', 'currentTime', 'currentFrame', src);
+    fn((name, cls) => { found[name] = (cls && cls.parameterDescriptors) || []; }, class { constructor(){ this.port = {postMessage(){}, onmessage: null}; } }, info.sampleRate || 48000, 0, 0);
+    Object.assign(descs, found); }
+
+  // installs the stand-ins on a global scope (the page), so `new AudioWorkletNode(ctx, ...)` works unchanged
+  function install(g){
+    g.AudioContext = NativeAudioContext; g.webkitAudioContext = NativeAudioContext;
+    const Real = g.AudioWorkletNode;
+    const Wrap = function AudioWorkletNode(ctx, name, opts){ if(ctx && ctx.isNative) return new NWorklet(ctx, name, opts); return new Real(ctx, name, opts); };
+    Wrap.prototype = NWorklet.prototype; g.AudioWorkletNode = Wrap; }
+
+  return {NativeAudioContext, install, descs, collectDescriptors, flush, classes: {NNode, NParam, NWorklet, NBuffer}};
+}
+if(typeof module !== 'undefined' && module.exports) module.exports = makeNativeAudio; else root.makeNativeAudio = makeNativeAudio;
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+
+// ===== Neon Peach: the native audio engine (desktop app only) =====
+// When the desktop app ships the C++ engine, Neon Peach talks to the audio interface directly (ASIO on Windows,
+// Core Audio on Mac). The page builds its sound exactly as before; nshim.js passes every call to the engine.
+const NAT_KEY = 'neonpeach.v1.native';
+const NAT = { prefs: null, info: null, r: null };
+function natPrefs(){ if(NAT.prefs) return NAT.prefs; let p = null; try{ p = JSON.parse(localStorage.getItem(NAT_KEY) || 'null'); }catch(e){} NAT.prefs = Object.assign({enabled: true, api: '', out: null, in: null, firstIn: 0, buffer: 64, rate: 48000}, p || {}); return NAT.prefs; }
+function natSave(){ try{ localStorage.setItem(NAT_KEY, JSON.stringify(NAT.prefs)); }catch(e){} }
+const API_ORDER = ['asio', 'core', 'wasapi', 'alsa', 'pulse', 'jack', 'ds'];
+function natPick(devs, p){
+  const apis = [...new Set(devs.map(d => d.api))].sort((a, b) => API_ORDER.indexOf(a) - API_ORDER.indexOf(b));
+  let api = apis.includes(p.api) ? p.api : (apis[0] || '');
+  const list = devs.filter(d => d.api === api);
+  const byName = (name, pick) => list.find(d => d.name === name && pick(d));
+  let out = (p.outName && byName(p.outName, d => d.outs > 0)) || list.find(d => d.defaultOut && d.outs > 0) || list.find(d => d.outs > 0);
+  let inp = api === 'asio' ? out : ((p.inName && byName(p.inName, d => d.ins > 0)) || list.find(d => d.defaultIn && d.ins > 0) || list.find(d => d.ins > 0));
+  return {api, apis, out, inp, list}; }
+async function natStart(){
+  if(!window.npNative || !window.makeNativeAudio) return false;
+  const p = natPrefs(); if(!p.enabled) return false;
+  try{
+    NAT.info = await npNative.info(); if(!NAT.info.available){ console.warn('native engine:', NAT.info.error); return false; }
+    let cfg;
+    if(p.api === 'null') cfg = {api: 'null', rate: p.rate, buffer: p.buffer, fakeInput: !!p.fakeInput};
+    else { const pk = natPick(NAT.info.devices, p); if(!pk.out) return false; cfg = {api: pk.api, out: pk.out.id, in: pk.inp ? pk.inp.id : pk.out.id, firstIn: p.firstIn|0, rate: p.rate, buffer: p.buffer}; NAT.pick = pk; }
+    const r = await npNative.open(cfg);
+    if(!r || !r.ok){ NAT.err = r && r.error || 'The audio interface would not open.'; return false; }
+    NAT.r = r; NAT.cfg = cfg;
+    const sh = makeNativeAudio({send: (ops) => npNative.send(ops)}, {sampleRate: r.sampleRate, outChannels: r.outChannels, baseLatency: r.buffer/r.sampleRate, outputLatency: r.outLatency});
+    sh.install(window); NAT.shim = sh;
+    npNative.onPacket(pk => { if(NP.ctx && NP.ctx._receive) NP.ctx._receive(pk); if(pk.errors) console.warn('native:', pk.errors); });
+    UI.native = true; return true;
+  }catch(e){ console.warn('native engine failed', e); NAT.err = String(e && e.message || e); return false; } }
+
+// power on: start the engine first, then the normal start-up builds everything on it
+const _powerOn = powerOn;
+powerOn = async function(){ if(NP.ctx) return; const lbl = $('#pwrlbl'); if(window.npNative && natPrefs().enabled){ if(lbl) lbl.textContent = 'Opening your audio interface…'; const ok = await natStart(); if(!ok && NAT.err) setTimeout(() => toast('Low-delay engine could not start (' + NAT.err + '). Using the browser engine.', 6000), 2500); } return _powerOn(); };
+
+// input: the interface's jacks come straight in. No microphone prompt.
+const _openInput = openInput;
+openInput = async function(){ if(!UI.native) return _openInput();
+  if(!UI.src){ UI.src = NP.ctx.createMediaStreamSource(null); UI.src.connect(NP.rig.inPre); }
+  UI.inputOk = true; if(UI.page === 'io') renderPage(); };
+const _refreshDevices = refreshDevices;
+refreshDevices = async function(force){ if(!UI.native) return _refreshDevices(force); try{ NAT.info = await npNative.info(); if(force) toast('Device list updated'); if(UI.page === 'io') renderPage(); }catch(e){} };
+
+// delay readout: the engine knows its own buffers
+const _latencyInfo = latencyInfo;
+latencyInfo = function(){ const L = _latencyInfo(); if(!L || !UI.native || !NAT.r) return L; const out = NAT.r.outLatency*1000, inp = NAT.r.inLatency*1000; L.out = out; L.inp = inp; L.inpSaid = true; L.total = out + inp + L.chain; return L; };
+
+const BUFS = [16, 32, 48, 64, 96, 128, 192, 256, 512];
+function nativeDeviceSection(){
+  const p = natPrefs(), r = NAT.r || {}, devs = (NAT.info && NAT.info.devices) || [], pk = natPick(devs, p);
+  const apiName = (a) => (devs.find(d => d.api === a) || {}).apiName || a;
+  const devOpt = (cur, need) => pk.list.filter(d => d[need] > 0).map(d => `<option value="${esc(d.name)}" ${cur && cur.name === d.name ? 'selected' : ''}>${esc(d.name)} (${d[need]} ${need === 'ins' ? 'in' : 'out'})</option>`).join('');
+  const inCount = pk.inp ? pk.inp.ins : 2, pairs = []; for(let i = 0; i < Math.max(1, inCount); i += 2) pairs.push(i);
+  const asio = pk.api === 'asio';
+  return `<section class="pane span2 natpane"><h4 class="pane-h">${icon('bolt')}Low-delay engine<em>Neon Peach talks to your interface directly${asio ? ' through its ASIO driver' : ''}</em></h4>
+  <div class="chips" style="margin:0 0 12px"><span class="ichip ok"><i class="ldot"></i>${esc(r.device || '')}</span><span class="ichip">${esc(apiName(r.api) || r.api || '')}</span><span class="ichip">${icon('wave')}${trimNum(((r.sampleRate || 48000)/1000).toFixed(1))} kHz</span><span class="ichip">${r.buffer || ''} samples</span><span class="ichip">${r.outChannels || 2} outputs</span></div>
+  <div class="grid2"><div class="field wide"><label for="natapi">Driver</label><select id="natapi">${pk.apis.map(a => `<option value="${a}" ${a === pk.api ? 'selected' : ''}>${esc(apiName(a))}${a === 'asio' ? ' (lowest delay)' : ''}</option>`).join('')}</select></div>
+  <div class="field wide"><label for="natout">${asio ? 'Interface' : 'Output'}</label><select id="natout">${devOpt(pk.out, 'outs')}</select></div>
+  ${asio ? '' : `<div class="field wide"><label for="natin">Input</label><select id="natin">${devOpt(pk.inp, 'ins')}</select></div>`}
+  <div class="field wide"><label for="natpair">Jacks in</label><select id="natpair">${pairs.map(i => `<option value="${i}" ${(p.firstIn|0) === i ? 'selected' : ''}>Inputs ${i + 1}${inCount > i + 1 ? '-' + (i + 2) : ''}</option>`).join('')}</select></div>
+  <div class="field wide"><label for="natbuf">Buffer</label><select id="natbuf">${BUFS.map(b => `<option value="${b}" ${p.buffer === b ? 'selected' : ''}>${b} samples (${(b/(r.sampleRate || 48000)*1000).toFixed(1)} ms)</option>`).join('')}</select></div>
+  <div class="field wide"><label for="natrate">Sample rate</label><select id="natrate">${[44100, 48000, 88200, 96000].map(x => `<option value="${x}" ${p.rate === x ? 'selected' : ''}>${trimNum((x/1000).toFixed(1))} kHz${x === 48000 ? ' (best for clones)' : ''}</option>`).join('')}</select></div></div>
+  <div class="row wrap" style="margin-top:12px"><button class="primary" id="natapply">${icon('refresh')}Apply</button><button class="sm" id="devrefresh">${icon('refresh')}Refresh list</button><button class="sm" id="natoff">Use the browser engine instead</button></div>
+  <p class="dim" style="margin-top:10px">Smaller buffers mean less delay. If you hear clicks, go one size up. ${asio ? '' : 'For the lowest delay on Windows, install your interface\'s ASIO driver from its maker.'}</p></section>`; }
+function nativeOffer(){ if(!window.npNative) return ''; const p = natPrefs(); return p.enabled ? `<p class="dim" style="margin-top:10px">${esc(NAT.err ? 'The low-delay engine could not start: ' + NAT.err : 'The low-delay engine is not running.')}</p>` : `<div class="row wrap" style="margin-top:10px"><button class="sm primary" id="naton">${icon('bolt')}Use the low-delay engine</button></div>`; }
+
+document.addEventListener('DOMContentLoaded', () => { const pedal = $('#pedal');
+  pedal.addEventListener('click', async (e) => { const t = e.target.closest('#natapply, #natoff, #naton'); if(!t) return; const p = natPrefs();
+    if(t.id === 'natoff' || t.id === 'naton'){ p.enabled = t.id === 'naton'; natSave(); confirm2(p.enabled ? 'Switch to the low-delay engine? Neon Peach restarts its sound.' : 'Switch to the browser engine? Neon Peach restarts its sound.', () => { try{ saveState(); }catch(err){} location.reload(); }, 'Restart sound'); return; }
+    // apply device settings
+    const v = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
+    const api = v('natapi'); if(api !== p.api){ p.api = api; p.outName = null; p.inName = null; } else { p.outName = v('natout'); p.inName = v('natin') || p.outName; }
+    p.firstIn = +(v('natpair') || 0); p.buffer = +(v('natbuf') || 64); const rate = +(v('natrate') || 48000);
+    const pk = natPick((NAT.info && NAT.info.devices) || [], p); if(!pk.out){ toast('No output device for that driver.'); return; }
+    if(rate !== (NAT.r && NAT.r.sampleRate)){ p.rate = rate; natSave(); confirm2('Changing the sample rate restarts Neon Peach\'s sound. Your presets are saved first.', () => { try{ saveState(); }catch(err){} location.reload(); }, 'Restart sound'); return; }
+    natSave(); toast('Opening ' + pk.out.name + '…', 1500);
+    const r = await npNative.open({api: pk.api, out: pk.out.id, in: pk.inp ? pk.inp.id : pk.out.id, firstIn: p.firstIn, rate, buffer: p.buffer});
+    if(!r || !r.ok){ toast('That did not open: ' + (r && r.error || 'unknown error'), 5000); return; }
+    if(r.fresh){ try{ saveState(); }catch(err){} location.reload(); return; }
+    NAT.r = r; NP.ctx._outChannels = r.outChannels; NP.ctx.baseLatency = r.buffer/r.sampleRate; NP.ctx.outputLatency = r.outLatency; UI.pingMs = null; routeOutputs(true); renderPage(); renderTop(); toast('Now using ' + r.device + ', ' + r.buffer + ' samples', 2500); });
+  pedal.addEventListener('change', (e) => { if(e.target.id === 'natapi'){ const p = natPrefs(); p.api = e.target.value; p.outName = p.inName = null; NAT.prefs = p; renderPage(); } });
+});
 
 // ===== Neon Peach: desktop app glue =====
 // Runs only inside the desktop app, where the preload script provides window.npDesktop. In a browser this file does nothing.

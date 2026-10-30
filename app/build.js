@@ -10,8 +10,8 @@ const fonts=[
   face('Saira','@fontsource-variable/saira/files/saira-latin-wdth-normal.woff2','font-weight:100 900;font-stretch:50% 125%;font-style:normal;')
 ].join('\n');
 const namWasm=await wat2wasm(r('wasm/namkern.wat')), trainWasm=await wat2wasm(r('wasm/lstmtrain.wat'));
-const css=r('style.css').replace('/*FONTS*/', fonts), worklets=r('worklets.js')+'\n'+r('worklets2.js'), engine=r('engine.js')+'\n'+r('fx2.js'), namcore=r('namcore.js'), cloner=r('cloner.js'), ui=r('ui.js'), ui2=r('ui2.js'), ui3=r('ui3.js'), ui4=r('ui4.js'), desktop=r('desktop.js');
-for(const [n,s] of [['worklets',worklets],['engine',engine],['namcore',namcore],['cloner',cloner],['ui',ui],['ui2',ui2],['ui3',ui3],['ui4',ui4],['desktop',desktop]]){ if(/<\/script/i.test(s)) throw new Error(n+' contains </script'); }
+const css=r('style.css').replace('/*FONTS*/', fonts), worklets=r('worklets.js')+'\n'+r('worklets2.js'), engine=r('engine.js')+'\n'+r('fx2.js'), namcore=r('namcore.js'), cloner=r('cloner.js'), ui=r('ui.js'), ui2=r('ui2.js'), ui3=r('ui3.js'), ui4=r('ui4.js'), nshim=r('nshim.js'), native=r('native.js'), desktop=r('desktop.js');
+for(const [n,s] of [['worklets',worklets],['engine',engine],['namcore',namcore],['cloner',cloner],['ui',ui],['ui2',ui2],['ui3',ui3],['ui4',ui4],['nshim',nshim],['native',native],['desktop',desktop]]){ if(/<\/script/i.test(s)) throw new Error(n+' contains </script'); }
 const kernels=`const NAM_WASM_B64='${namWasm.toString('base64')}', TRAIN_WASM_B64='${trainWasm.toString('base64')}';`;
 const POWER='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v8"/><path d="M6.6 6.6a7.6 7.6 0 1 0 10.8 0"/></svg>';
 const html=`<!DOCTYPE html>
@@ -58,6 +58,8 @@ ${ui}
 ${ui2}
 ${ui3}
 ${ui4}
+${nshim}
+${native}
 ${desktop}
 </script>
 </body>

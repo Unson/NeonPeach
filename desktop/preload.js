@@ -19,3 +19,12 @@ contextBridge.exposeInMainWorld('npDesktop', {
   onOpenFile: (fn) => on('np:open-file', fn),
   onWantClose: (fn) => on('np:want-close', () => { ipcRenderer.send('np:close-ack'); fn(); })
 });
+
+// the native audio engine: the page's audio graph is mirrored there and runs on the audio interface
+contextBridge.exposeInMainWorld('npNative', {
+  info: () => ipcRenderer.invoke('np:nat-info'),
+  open: (cfg) => ipcRenderer.invoke('np:nat-open', cfg),
+  close: () => ipcRenderer.invoke('np:nat-close'),
+  send: (ops) => ipcRenderer.send('np:nat-cmd', ops),
+  onPacket: (fn) => on('np:nat-pk', fn)
+});
