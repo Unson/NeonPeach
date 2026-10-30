@@ -14,6 +14,29 @@ HOW TO RUN
 No bass handy? Press "Hear it" on the Wizard page, or open Settings > Audio
 and press "Play the demo riff".
 
+NEW IN 2.3: THE NEON 900 HEAD
+- A Darkglass-style bass amp in one block. Find it under Amp in the
+  block picker. Four presets are in bank 6. The Wizard has two new styles:
+  Microtubes 900 and Alpha-Omega Wall.
+- Circuit: Microtubes or Alpha-Omega.
+  Microtubes: the Era knob goes from B3K (0, tight and clanky) to
+  Vintage (100, warm and round).
+  Alpha-Omega: the Mod knob goes from Alpha (0, tight and punchy) to
+  Omega (100, raw and fuzzy).
+- Drive, Blend, Level and Tone work like the pedals.
+- Grunt (Thin / Raw / Fat) sets how much low end hits the drive.
+  Attack (Cut / Flat / Boost) sets how much top end hits the drive.
+  Bite pushes 2.8 kHz into the drive. Growl pushes the low mids in.
+- Gain is the clean preamp gain, before the drive.
+- The EQ is the 900 tone stack: Bass at 70 Hz, Lo Mids at 250, 500 or
+  1k, Hi Mids at 750, 1.5k or 3k, Treble at 5 kHz.
+- Sag is the power amp giving a little under a hard note. Master is the
+  power amp level. Cab adds one of the eight cabs, or Off to use a Cab
+  block or a real amp.
+- The drive runs 4 times oversampled with anti-aliasing, so it is clean
+  at high gain. It adds 0.4 ms, the same as any drive block.
+- It plays the same in the low-delay engine and in the browser engine.
+
 NEW IN 2.2: THE BEDROOM KIT
 - Songs (Practice > Songs): load any song. Drag across the waveform to
   loop a hard part. Slow it down without changing the pitch. Change its
@@ -130,9 +153,9 @@ WHERE THINGS ARE
 
 WHAT IT DOES
 - 2 signal paths. Parallel, crossover, series, or A only.
-- Up to 24 blocks. 55 block types.
+- Up to 24 blocks. 56 block types.
 - Drives: B3K, Vintage, Alpha, Omega, Ignissor fuzz, overdrive, tube pre, wavefolder.
-- 8 amp heads, 8 cabs, 4 mic types, load your own .wav IRs.
+- The Neon 900 head (Darkglass-style), 8 classic amp heads, 8 cabs, 4 mic types, load your own .wav IRs.
 - Clone: copy any pedal or plugin. Load .nam files and .wav IRs. (See CLONE below.)
 - Tone Match: match a record you love with a 10-band EQ.
 - Compressor, gate, limiter. Parametric, graphic, 6-band EQ, cuts.

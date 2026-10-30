@@ -1,9 +1,9 @@
 // Renders each block in Chrome (OfflineAudioContext) and in the native engine with the same input, and compares them.
 const { chromium } = require('playwright'); const fs = require('fs'), path = require('path'), vm = require('vm');
-const NPDIR = '/home/claude/neonpeach', NAT = path.resolve(__dirname, '..');
+const NAT = path.resolve(__dirname, '..'), NPDIR = path.resolve(NAT, '../app');
 const addon = require(path.join(NAT, 'build/linux-x64/npaudio.node')), makeNativeAudio = require(path.join(NAT, 'shim.js'));
 const wsrc = ['namcore.js', 'worklets.js', 'worklets2.js'].map(f => fs.readFileSync(path.join(NPDIR, f), 'utf8')).join('\n');
-const esrc = fs.readFileSync(path.join(NPDIR, 'engine.js'), 'utf8') + '\n' + fs.readFileSync(path.join(NPDIR, 'fx2.js'), 'utf8');
+const esrc = fs.readFileSync(path.join(NPDIR, 'engine.js'), 'utf8') + '\n' + fs.readFileSync(path.join(NPDIR, 'fx2.js'), 'utf8') + '\n' + fs.readFileSync(path.join(NPDIR, 'amp2.js'), 'utf8');
 const SR = 48000, N = SR*2;
 const only = process.argv[2] ? process.argv[2].split(',') : null;
 // test input: plucked bass notes with harmonics, then a quiet tail

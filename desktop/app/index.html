@@ -4130,6 +4130,72 @@ def('auxsend', { name:'Aux Send', cat:'Routing', desc:'Sends the sound at this s
 const DESC={ comp:'Evens out your playing. Blend keeps the attack.', gate:'Cuts hiss and hum when you stop playing.', limiter:'A hard ceiling. Nothing gets louder than this.', b3k:'Gritty, punchy drive with a clean blend.', vintage:'Warm, round tube-style drive.', alpha:'Tight modern crunch.', omega:'Big, growling distortion.', ignis:'Raw fuzz.', od:'Smooth overdrive.', fold:'Wild folding distortion. Synth-like.', tubepre:'A gentle tube preamp glow.', amp:'Eight amp heads with a tone stack.', capture:'An old-style capture.', clone:'A pedal or plugin you copied, or a .nam file.', cab:'Speaker cabinet and mic. Load your own IRs too.', peq:'Five-band parametric EQ.', geq:'Ten sliders, from 31 Hz to 16 kHz.', tone6:'Six knobs tuned for bass.', cut:'Cut the lowest lows and the fizz.', octave:'Analog-style octave down. Tracks fast.', pitch:'Shift up or down by any amount.', harm:'Adds two harmony voices.', synth:'A synth that follows the notes you play.', envf:'Funky auto-wah that follows your picking.', wah:'A wah you sweep with the expression pedal.', filter:'Low pass, high pass, band pass or notch.', chorus:'Shimmer and width.', flanger:'Jet-plane swoosh.', phaser:'Swirl.', trem:'Pulses the volume.', vibrato:'Wobbles the pitch.', rotary:'A spinning speaker.', ring:'Metallic, bell-like tones.', crush:'Lo-fi and broken, on purpose.', delay:'Echoes. Digital, tape, analog or ping pong.', mdelay:'Up to four echo taps.', reverb:'Rooms, halls, springs and shimmer.', vol:'Volume, pan, mute and phase.', widen:'Make it wider, or mono.', boost:'A clean push.', xover:'Tilt the lows against the highs.', looper:'Record a loop and play over it.' };
 Object.entries(DESC).forEach(([t,d])=>{ if(BLOCKS[t] && !BLOCKS[t].desc) BLOCKS[t].desc=d; });
 
+// ===== Neon Peach 2.3: the Neon 900 head. A Darkglass-style bass amp in one block. =====
+// Built only from nodes that both engines have (gain, biquad, delay, the 4x drive, the compressor, the convolver),
+// so it plays the same through the browser engine and the low-delay C++ engine.
+'use strict';
+
+// ---------- The four drive circuits ----------
+// Each is a transfer curve for the 4x oversampled shaper. x is the signal after the pre-gain.
+// b3k:   two CMOS inverter stages. A soft first stage with a little bias, then a hard second stage. Tight and clanky.
+// vint:  a warmer, rounder clip that compresses early. Less gain, more even harmonics.
+// alpha: a hard knee that stays clean right up to the edge, then clamps. Tight, punchy, bright.
+// omega: saturates early and leans to one side, so it grows even harmonics and a fuzzy, raw edge.
+const HEAD_CIRC={ b3k:{gain:120, f:(x)=>{ const y1=Math.tanh(1.1*(x+0.12))-Math.tanh(0.132); const u=y1*1.7; return u/Math.pow(1+Math.pow(Math.abs(u),3),1/3); }},
+  vint:{gain:60, f:(x)=>{ const u=x+0.06; return Math.tanh(1.25*Math.tanh(0.8*u))-Math.tanh(1.25*Math.tanh(0.048)); }},
+  alpha:{gain:100, f:(x)=>{ const u=x*1.2, y=u/Math.pow(1+Math.pow(Math.abs(u),5),1/5); return Math.tanh(1.3*y)/Math.tanh(1.3); }},
+  omega:{gain:170, f:(x)=>{ let y=Math.tanh(1.6*(x+0.2))-Math.tanh(0.32); y=y-0.08*y*y*y; return y; }} };
+function headCurve(circ, drive){ const N=8192, c=new Float32Array(N), m=HEAD_CIRC[circ]||HEAD_CIRC.b3k, g=1+Math.pow(drive,1.4)*m.gain;
+  for(let i=0;i<N;i++) c[i]=m.f(((i/(N-1))*2-1)*g);
+  let mx=0; for(let i=0;i<N;i++) mx=Math.max(mx,Math.abs(c[i])); if(mx>0) for(let i=0;i<N;i++) c[i]/=mx; return c; }
+// Which two circuits the Mod knob blends, for each Circuit setting
+const HEAD_PAIR=[['b3k','vint'],['alpha','omega']];
+// Each circuit's own voice after the clip: two filters, [type, Hz, Q, dB]
+const HEAD_VOICE={ b3k:[['highpass',60,0.7,0],['peaking',2000,1,2]], vint:[['peaking',500,0.9,2.5],['lowpass',4500,0.7,0]], alpha:[['highpass',85,0.7,0],['peaking',1200,1,2]], omega:[['lowshelf',140,0.7,3],['lowpass',5000,0.7,0]] };
+function headVoice(f1, f2, circ){ const v=HEAD_VOICE[circ]||HEAD_VOICE.b3k; [f1,f2].forEach((f,i)=>{ const [t,hz,q,g]=v[i]; f.type=t; f.frequency.value=hz; f.Q.value=q; f.gain.value=g; }); }
+const HEAD_GRUNT=[170,100,50], HEAD_ATT=[-6,0,8], HEAD_LMF=[250,500,1000], HEAD_HMF=[750,1500,3000];
+// Every plain gain in the head, from the settings. Used when the block is made and every time a knob moves.
+function headGains(p){ const bl=p.blend/100*Math.PI/2, mod=p.mod/100*Math.PI/2, cab=p.cab|0;
+  return { inG:dB(p.input), cg:Math.cos(bl), lvl:dB(p.level)*Math.sin(bl)*0.5, gA:Math.cos(mod), gB:Math.sin(mod), m:dB(p.master)*0.6, cvg:cab>0?1:0, by:cab>0?0:1 }; }
+
+def('head', { name:'Neon 900 Head', cat:'Amp', color:'#fc6', desc:'A Darkglass-style head. Microtubes or Alpha·Omega drive, 4-band EQ, power amp sag, and a cab.',
+  params:{ drive:P('Drive',0,100,50,'%'), blend:P('Blend',0,100,60,'%'), level:P('Level',-24,24,0,'dB'), tone:P('Tone',-12,12,0,'dB'), mod:P('Mod',0,100,0,'%'), circuit:E('Circuit',['Microtubes','Alpha·Omega'],0),
+    grunt:E('Grunt',['Thin','Raw','Fat'],1), attack:E('Attack',['Cut','Flat','Boost'],1), bite:P('Bite',0,100,0,'%'), growl:P('Growl',0,100,0,'%'), highcut:P('High Cut',3000,12000,7000,'Hz'), input:P('Gain',-12,24,0,'dB'),
+    bass:P('Bass',-12,12,0,'dB'), lomid:P('Lo Mids',-12,12,0,'dB'), lomidf:E('Lo Mid Freq',['250','500','1k'],1), himid:P('Hi Mids',-12,12,0,'dB'), himidf:E('Hi Mid Freq',['750','1.5k','3k'],1), treble:P('Treble',-12,12,0,'dB'),
+    master:P('Master',-24,12,0,'dB'), sag:P('Sag',0,100,25,'%'), cab:E('Cab',['Off'].concat(CAB_NAMES),0) },
+  // the Mod knob is called Era on the Microtubes circuit, like the Vintage pedal
+  spec(b,k,s){ if(k==='mod') return Object.assign({},s,{l:b.p.circuit?'Mod':'Era'}); return null; },
+  note(b){ return b.p.circuit ? 'Mod blends Alpha (0, tight and punchy) into Omega (100, raw and fuzzy). Bite and Growl push highs and low mids into the drive.' : 'Era blends B3K (0, tight and clanky) into Vintage (100, warm and round). Grunt sets how much low end hits the drive.'; },
+  build(ctx,b){ const n=b.n, p=b.p; const pair=HEAD_PAIR[p.circuit|0]||HEAD_PAIR[0];
+    n.inHP=ctx.createBiquadFilter(); n.inHP.type='highpass'; n.inHP.frequency.value=28; n.inHP.Q.value=0.7; n.inG=ctx.createGain();
+    // clean side waits for the drive, so blending them never thins out
+    n.cd=ctx.createDelay(0.01); n.cd.delayTime.value=SHAPER_LAT/ctx.sampleRate; n.cg=ctx.createGain();
+    // drive side: what goes in (grunt, growl, attack, bite), the two circuits, then what comes out (dc, high cut, tone, level)
+    n.gr=ctx.createBiquadFilter(); n.gr.type='highpass'; n.gr.Q.value=0.7; n.growl=ctx.createBiquadFilter(); n.growl.type='peaking'; n.growl.frequency.value=280; n.growl.Q.value=1;
+    n.att=ctx.createBiquadFilter(); n.att.type='highshelf'; n.att.frequency.value=2800; n.bite=ctx.createBiquadFilter(); n.bite.type='peaking'; n.bite.frequency.value=2800; n.bite.Q.value=1.3;
+    n.shA=initCurve(shaperNode(ctx, headCurve(pair[0], p.drive/100)), pair[0], p.drive); n.shB=initCurve(shaperNode(ctx, headCurve(pair[1], p.drive/100)), pair[1], p.drive); n.gA=ctx.createGain(); n.gB=ctx.createGain(); n.vA1=ctx.createBiquadFilter(); n.vA2=ctx.createBiquadFilter(); n.vB1=ctx.createBiquadFilter(); n.vB2=ctx.createBiquadFilter();
+    n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12; n.dc.Q.value=0.5; n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.Q.value=0.6; n.tone=ctx.createBiquadFilter(); n.tone.type='highshelf'; n.tone.frequency.value=1800; n.lvl=ctx.createGain();
+    // the amp: 4-band EQ, power amp sag, master, cab
+    n.eq0=ctx.createGain(); n.bass=ctx.createBiquadFilter(); n.bass.type='lowshelf'; n.bass.frequency.value=70; n.lm=ctx.createBiquadFilter(); n.lm.type='peaking'; n.lm.Q.value=0.8; n.hm=ctx.createBiquadFilter(); n.hm.type='peaking'; n.hm.Q.value=0.8; n.tr=ctx.createBiquadFilter(); n.tr.type='highshelf'; n.tr.frequency.value=5000;
+    n.sag=compNode(ctx); n.sag.parameters.get('knee').value=10; n.sag.parameters.get('attack').value=5; n.sag.parameters.get('release').value=150; n.sag.parameters.get('auto').value=1; n.m=ctx.createGain();
+    n.cv=ctx.createConvolver(); n.cvg=ctx.createGain(); n.by=ctx.createGain(); n.cur=-1;
+    { const g=headGains(p); for(const k in g) n[k].gain.value=g[k]; }   // every gain starts where it belongs, so a new block has no loud first moment
+    b.wetIn.connect(n.inHP).connect(n.inG);
+    n.inG.connect(n.cd).connect(n.cg).connect(n.eq0);
+    n.inG.connect(n.gr).connect(n.growl).connect(n.att).connect(n.bite); n.bite.connect(n.shA).connect(n.vA1).connect(n.vA2).connect(n.gA).connect(n.dc); n.bite.connect(n.shB).connect(n.vB1).connect(n.vB2).connect(n.gB).connect(n.dc);
+    n.dc.connect(n.lp).connect(n.tone).connect(n.lvl).connect(n.eq0);
+    n.eq0.connect(n.bass).connect(n.lm).connect(n.hm).connect(n.tr).connect(n.sag).connect(n.m);
+    n.m.connect(n.cv).connect(n.cvg).connect(b.wetOut); n.m.connect(n.by).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p, pair=HEAD_PAIR[p.circuit|0]||HEAD_PAIR[0], d=p.drive/100;
+    { const g=headGains(p); for(const k in g) setP(n[k].gain, g[k]); }
+    n.gr.frequency.value=HEAD_GRUNT[p.grunt|0]??100; n.growl.gain.value=p.growl/100*9; n.att.gain.value=HEAD_ATT[p.attack|0]??0; n.bite.gain.value=p.bite/100*10;
+    setCurve(n.shA, pair[0]+':'+p.drive, ()=>headCurve(pair[0], d)); setCurve(n.shB, pair[1]+':'+p.drive, ()=>headCurve(pair[1], d)); headVoice(n.vA1, n.vA2, pair[0]); headVoice(n.vB1, n.vB2, pair[1]);
+    n.lp.frequency.value=p.highcut; n.tone.gain.value=p.tone;
+    n.bass.gain.value=p.bass; n.lm.frequency.value=HEAD_LMF[p.lomidf|0]??500; n.lm.gain.value=p.lomid; n.hm.frequency.value=HEAD_HMF[p.himidf|0]??1500; n.hm.gain.value=p.himid; n.tr.gain.value=p.treble;
+    wp(n.sag,'threshold',-30+(1-p.sag/100)*30); wp(n.sag,'ratio',1+p.sag/100*2.5);
+    const cab=p.cab|0; if(cab!==n.cur){ n.cur=cab; n.cv.buffer = cab>0 ? genCabIR(NP.ctx, CAB_NAMES[cab-1]) : null; } }
+});
+
 /* Neon Peach neural core.
    Reads .nam model files (the open Neural Amp Modeler format) and plays them.
    The same file runs on the page, inside the audio worklet, and in Node tests. */
@@ -5336,7 +5402,8 @@ function fmtVal(spec,v){ if(spec.e) return spec.e[Math.round(v)] ?? ''; const u=
   } }
 
 function toast(msg, ms=2000){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(UI.toastT); UI.toastT=setTimeout(()=>t.classList.remove('on'),ms); }
-function paramSpec(b,k){ const s=BLOCKS[b.type].params[k]; if(!s) return null;
+function paramSpec(b,k){ const d=BLOCKS[b.type], s=d.params[k]; if(!s) return null;
+  if(d.spec){ const o=d.spec(b,k,s); if(o) return o; }   // a block can rename or reshape a control from its settings
   if(b.type==='clone'&&k==='clone') return Object.assign({},s,{e:[b.p.cid&&cloneIndex(b.p.cid)<0?'(missing)':'(none)'].concat(NP.clones.map(c=>c.name)), max:NP.clones.length});
   if(b.type==='capture'&&k==='cap') return Object.assign({},s,{e:['(none)'].concat(NP.captures.map(c=>c.name)), max:NP.captures.length});
   const CK={cab:'irid', cabA:'idA', cabB:'idB'}; if((b.type==='cab'||b.type==='cab2')&&CK[k]){ const id=b.p[CK[k]], r=libIR(id), e=CAB_NAMES.concat(NP.irs.map(i=>i.name)); if(id) e.push(r?'★ '+r.name:'(IR not on this device)'); return Object.assign({},s,{e, max:e.length-1}); }
@@ -5446,7 +5513,7 @@ function updateParamViews(b,k){ const s=paramSpec(b,k); const v=b.p[k]; const pv
   refreshKnobs(); }
 
 // --- Library ---
-const NEW_BLOCKS=['mbdrive','muff','octfuzz','mbcomp','swell','revdelay','freeze','vowel','stutter','doubler','tilt','fxloop','auxsend'];
+const NEW_BLOCKS=['head'];
 function showLibrary(path){ if(totalBlocks()>=MAX_BLOCKS){ toast('24 blocks is the limit. Delete one first.'); return; }
   const sel=selectedBlock&&selectedBlock(), after=sel&&refOf(sel)&&refOf(sel)[0]===path?sel:null;
   const groups=CATS.map(c=>{ const items=Object.values(BLOCKS).filter(d=>d.cat===c && (d.type!=='capture'||NP.captures.length)); if(!items.length) return ''; return `<div class="lgroup" data-cat="${c}" style="--c:${CAT_COLOR[c]}"><div class="lcat">${icon(CAT_ICON[c])}${c}</div><div class="litems">${items.map(d=>`<button class="litem" data-lib="${d.type}" data-q="${esc((d.name+' '+c+' '+(d.desc||'')).toLowerCase())}" title="${esc(d.desc||'')}"><b>${esc(d.name)}${NEW_BLOCKS.includes(d.type)?'<i class="newtag">new</i>':''}</b><span>${esc(d.desc||'')}</span></button>`).join('')}</div></div>`; }).join('');
@@ -5546,7 +5613,7 @@ PAGE_RENDER.global=()=>{ const g=NP.globals; const f=['60','180','500','1.2k','3
   <section class="pane"><h4 class="pane-h">Keyboard</h4><div class="keys"><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>Footswitches</span><span><kbd>Space</kbd>Tap tempo</span><span><kbd>T</kbd>Tuner</span><span><kbd>M</kbd>Next mode</span><span><kbd>R</kbd>Loop record</span><span><kbd>S</kbd>Loop stop</span><span><kbd>B</kbd>Beats</span><span><kbd>F</kbd>Stage mode</span><span><kbd>Ctrl</kbd><kbd>Z</kbd>Undo</span></div></section></div>`; };
 
 // --- Help ---
-const HELP_FEAT=[['Drive','Eleven drives, including Split Grind (clean lows, dirty highs), Peach Muff and Octave Fuzz.'],['Amp','Eight amp heads with sag, tone stack and presence.'],['Clone','Copy any pedal or plugin, or load .nam and IR files. Exports .nam files too.'],['Cab','Eight cabs, four mic types, and your own IR files.'],['Dynamics','Compressor with blend, three-band compressor, gate, limiter and Auto Swell. None of them add delay.'],['EQ','Parametric, 10-band graphic, a 6-band shaper, cuts, and Tone Match.'],['Pitch','Sub octave, pitch shift and a two-voice harmonizer.'],['Synth','Peach Synth follows the notes you play. Freeze holds a note as a pad.'],['Filter','Envelope filter, pedal wah, Talk Box and a multi filter.'],['Mod','Chorus, flanger, phaser, tremolo, vibrato, rotary, ring mod, bit crusher, Doubler and Stutter.'],['Delay','Digital, tape, analog, ping pong, multi-tap and reverse. Tempo sync and trails.'],['Routing','FX Loop for real pedals. Aux Send for a stage amp.'],['Reverb','Room, hall, plate, spring, cathedral and shimmer.'],['Looper','Three minutes. Dub, undo, reverse and half speed.']];
+const HELP_FEAT=[['Drive','Eleven drives, including Split Grind (clean lows, dirty highs), Peach Muff and Octave Fuzz.'],['Amp','The Neon 900: a Darkglass-style head with Microtubes and Alpha·Omega drive. Plus eight classic amp heads with sag.'],['Clone','Copy any pedal or plugin, or load .nam and IR files. Exports .nam files too.'],['Cab','Eight cabs, four mic types, and your own IR files.'],['Dynamics','Compressor with blend, three-band compressor, gate, limiter and Auto Swell. None of them add delay.'],['EQ','Parametric, 10-band graphic, a 6-band shaper, cuts, and Tone Match.'],['Pitch','Sub octave, pitch shift and a two-voice harmonizer.'],['Synth','Peach Synth follows the notes you play. Freeze holds a note as a pad.'],['Filter','Envelope filter, pedal wah, Talk Box and a multi filter.'],['Mod','Chorus, flanger, phaser, tremolo, vibrato, rotary, ring mod, bit crusher, Doubler and Stutter.'],['Delay','Digital, tape, analog, ping pong, multi-tap and reverse. Tempo sync and trails.'],['Routing','FX Loop for real pedals. Aux Send for a stage amp.'],['Reverb','Room, hall, plate, spring, cathedral and shimmer.'],['Looper','Three minutes. Dub, undo, reverse and half speed.']];
 PAGE_RENDER.help=()=>`<div class="lead"><div class="lead-ico">${icon('help')}</div><div><h3>How Neon Peach works</h3><p>Plug your bass into an audio interface. On the I/O page, pick the interface and the jack your bass is in. Build a chain on two paths. Save it as a preset. Then play it live with the footswitches.</p></div></div>
   <div class="feat">${HELP_FEAT.map(([c,t])=>`<div class="fcard" style="--c:${CAT_COLOR[c]}">${icon(CAT_ICON[c])}<b>${c}</b><span>${t}</span></div>`).join('')}</div>
   <div class="grid2"><section class="pane"><h4 class="pane-h">The three modes</h4><p><b class="t-cyan">Preset:</b> A goes back, B goes forward, C taps the tempo.</p><p><b class="t-pink">Scene:</b> A, B and C jump between scenes.</p><p><b class="t-peach">Stomp:</b> A, B and C flip the blocks you pick.</p><p>Hold C in any mode for the tuner. Hold B to record a loop.</p></section>
@@ -6281,7 +6348,9 @@ const WIZ=[
   {id:'talk', n:'Talk Box Funk', d:'Your bass says "wow". Dig in harder to open it up.', c:'#ff3fa8', bpm:100, A:()=>[['comp',{thr:-24,ratio:4,attack:5}],['vowel',{mode:0,from:3,to:0,sens:60,q:10}],['octave',{sub1:45,dry:100}],['amp',{model:2,gain:25}],['cab',{cab:1}]]},
   {id:'stoner', n:'Octave Fuzz Rock', d:'Ringing octave fuzz. Play high on the neck.', c:'#ffe14f', bpm:126, A:()=>[['octfuzz',{drive:72,blend:80}],['amp',{model:6,gain:40}],['cab',{cab:6}],['reverb',{type:3,mix:12}]]},
   {id:'chop', n:'Glitch Chop', d:'Stutter cuts in time with the tempo. Tap the tempo to steer it.', c:'#36b9ff', bpm:128, A:()=>[['comp',{thr:-22,ratio:4}],['b3k',{drive:50,blend:60}],['stutter',{mode:0,div:2,duty:55},1],['amp',{model:3,gain:25}],['cab',{cab:3}],['delay',{type:3,sync:2,fb:25,mix:15}]], stomps:{A:'stutter'}},
-  {id:'clean', n:'Studio DI Clean', d:'Clean, even and honest. A good place to start.', c:'#cdc4e6', bpm:120, A:()=>[['comp',{thr:-20,ratio:3}],['tone6',{b70:2,b2k:1}],['amp',{model:5,gain:20}],['cab',{cab:1}]]}];
+  {id:'clean', n:'Studio DI Clean', d:'Clean, even and honest. A good place to start.', c:'#cdc4e6', bpm:120, A:()=>[['comp',{thr:-20,ratio:3}],['tone6',{b70:2,b2k:1}],['amp',{model:5,gain:20}],['cab',{cab:1}]]},
+  {id:'m900', n:'Microtubes 900', d:'The Neon 900 on its Microtubes circuit. Tight grind, bright pick attack.', c:'#ffb347', bpm:150, A:()=>[['comp',{thr:-24,ratio:4,attack:6,blend:80}],['head',{circuit:0,drive:55,blend:60,mod:15,grunt:1,attack:2,tone:1,himid:2,treble:2,cab:1}]]},
+  {id:'ao900', n:'Alpha·Omega Wall', d:'The Neon 900 on Alpha·Omega. Mod leans to Omega for a raw, fuzzy wall.', c:'#ff6a4d', bpm:120, A:()=>[['gate',{thr:-56}],['head',{circuit:1,drive:70,blend:70,mod:65,grunt:2,growl:45,bite:30,tone:-1,bass:2,lomid:-2,lomidf:1,cab:1}]]}];
 UI.wiz={id:null, m:{dirt:0.5, bright:0.5, low:0.5, space:0.2, squash:0.5}};
 const WIZ_M=[['dirt','Dirt','How much grit'],['bright','Bright','Dark to sparkly'],['low','Low end','Thin to huge'],['squash','Squash','Loose to even'],['space','Space','Dry to dreamy']];
 function wizBuild(style, m){ const p=blankPreset(style.n); p.bpm=style.bpm; const mk=(list)=>list.map(([t,pp,by])=>({type:t,p:Object.assign({},pp||{}),bypass:!!by}));
@@ -6290,6 +6359,7 @@ function wizBuild(style, m){ const p=blankPreset(style.n); p.bpm=style.bpm; cons
   all.forEach(b=>{ const d=BLOCKS[b.type], q=b.p, def=(k)=>q[k]??d.params[k].def;
     if(d.cat==='Drive'){ if('drive' in d.params) q.drive=clampN(def('drive')+dd*70,0,100); if('sustain' in d.params) q.sustain=clampN(def('sustain')+dd*50,0,100); }
     if(b.type==='amp'){ q.gain=clampN(def('gain')+dd*40,0,100); q.treble=clampN(def('treble')+br*12,-12,12); q.bass=clampN(def('bass')+lo*10,-12,12); }
+    if(b.type==='head'){ q.drive=clampN(def('drive')+dd*60,0,100); q.blend=clampN(def('blend')+dd*40,0,100); q.treble=clampN(def('treble')+br*10,-12,12); q.bass=clampN(def('bass')+lo*10,-12,12); q.sag=clampN(def('sag')+(sq-0.5)*50,0,100); }
     if(b.type==='cab'){ q.highcut=clampN(def('highcut')*Math.pow(2,br*1.6),2000,16000); }
     if(b.type==='comp'){ q.ratio=clampN(1+sq*7,1,20); q.thr=clampN(-10-sq*22,-60,0); }
     if(b.type==='mbdrive'){ q.lows=clampN(def('lows')+lo*10,-24,12); q.squeeze=clampN(def('squeeze')+(sq-0.5)*60,0,100); }
@@ -6415,6 +6485,14 @@ function factoryPresetsV2(){ const out=WIZ.map(s=>wizBuild(s,{dirt:0.5,bright:0.
   out.push(mk('Pedal in the Loop',[['comp',{}],['fxloop',{}],['amp',{model:0,gain:30}],['cab',{cab:0}]]));
   return out.slice(0,24); }
 function installV2Presets(force){ const list=factoryPresetsV2(); let put=0; list.forEach((p,i)=>{ const idx=16+i; if(force||!UI.banks[idx]){ UI.banks[idx]=JSON.parse(JSON.stringify(p)); put++; } }); return put; }
+// 2.3: four Neon 900 presets go into bank 6 (empty slots only), once
+function factoryPresetsV23(){ const mk=(name,A,bpm)=>{ const p=blankPreset(name); p.A=A.map(([t,pp,by])=>({type:t,p:pp||{},bypass:!!by})); if(bpm) p.bpm=bpm; const i=p.A.findIndex(b=>b.type==='head'); if(i>=0) p.stomps.A=[{ref:'A'+i,mode:'toggle'}]; const j=p.A.findIndex(b=>['Delay','Reverb'].includes(BLOCKS[b.type].cat)); if(j>=0) p.stomps.C=[{ref:'A'+j,mode:'toggle'}]; return p; };
+  return [ mk('900 B3K Grind',[['comp',{thr:-24,ratio:4,attack:6,blend:85}],['head',{circuit:0,drive:60,blend:65,mod:0,grunt:1,attack:2,tone:2,himid:3,himidf:1,treble:1,cab:1}]],150),
+    mk('900 Vintage Warm',[['comp',{thr:-20,ratio:3,attack:20}],['head',{circuit:0,drive:40,blend:55,mod:100,grunt:2,attack:1,tone:-3,bass:2,lomid:2,lomidf:0,treble:-2,sag:45,cab:3}]],110),
+    mk('900 Alpha Punch',[['gate',{thr:-58}],['comp',{thr:-26,ratio:5,attack:4}],['head',{circuit:1,drive:65,blend:70,mod:0,grunt:1,attack:2,bite:50,tone:1,lomid:-3,lomidf:1,himid:3,himidf:2,cab:4}]],140),
+    mk('900 Omega Doom',[['head',{circuit:1,drive:85,blend:80,mod:100,grunt:2,growl:70,bite:20,tone:-2,bass:3,highcut:5500,sag:60,cab:1}],['reverb',{type:0,mix:10}]],62) ]; }
+function installV23Presets(){ let put=0, idx=40; factoryPresetsV23().forEach(p=>{ while(idx<128 && UI.banks[idx]) idx++; if(idx<128){ UI.banks[idx]=JSON.parse(JSON.stringify(p)); idx++; put++; } }); return put; }
+function v23Upgrade(){ try{ if(!localStorage.getItem(LS+'.v23')){ const n=installV23Presets(); localStorage.setItem(LS+'.v23','1'); if(n) setTimeout(()=>toast(n+' new Neon 900 amp presets in bank 6. Find the head under Amp in the block picker.', 4500), 2200); saveState(); } }catch(e){} }
 function v2Upgrade(){ try{ if(!localStorage.getItem(LS+'.v2')){ const n=installV2Presets(false); localStorage.setItem(LS+'.v2','1'); if(n) setTimeout(()=>toast(n+' new presets in banks 3 to 5. Try the Wizard and Beats pages too.', 4500), 1600); saveState(); } }catch(e){} }
 
 // ---------- Events for the new pages ----------
@@ -6460,7 +6538,7 @@ const _renderFoot=renderFoot; renderFoot=function(){ _renderFoot(); if(UI.stage)
 const _renderTop=renderTop; renderTop=function(){ _renderTop(); if(UI.stage) renderStage(); };
 
 // ---------- Start-up for v2: called once the rig is on ----------
-function v2Start(){ drLoad(); v2Upgrade();
+function v2Start(){ drLoad(); v2Upgrade(); v23Upgrade();
   // exclusive audio safety: if the engine clock does not move, turn exclusive mode back off and restart
   if(window.npDesktop && UI.appSet===null){ setTimeout(v2Watch, 1500); } else v2Watch(); }
 function v2Watch(){ if(!(window.npDesktop&&npDesktop.setSettings&&UI.appSet&&UI.appSet.exclusiveAudio)) return; const t0=NP.ctx.currentTime;

@@ -85,7 +85,9 @@ const WIZ=[
   {id:'talk', n:'Talk Box Funk', d:'Your bass says "wow". Dig in harder to open it up.', c:'#ff3fa8', bpm:100, A:()=>[['comp',{thr:-24,ratio:4,attack:5}],['vowel',{mode:0,from:3,to:0,sens:60,q:10}],['octave',{sub1:45,dry:100}],['amp',{model:2,gain:25}],['cab',{cab:1}]]},
   {id:'stoner', n:'Octave Fuzz Rock', d:'Ringing octave fuzz. Play high on the neck.', c:'#ffe14f', bpm:126, A:()=>[['octfuzz',{drive:72,blend:80}],['amp',{model:6,gain:40}],['cab',{cab:6}],['reverb',{type:3,mix:12}]]},
   {id:'chop', n:'Glitch Chop', d:'Stutter cuts in time with the tempo. Tap the tempo to steer it.', c:'#36b9ff', bpm:128, A:()=>[['comp',{thr:-22,ratio:4}],['b3k',{drive:50,blend:60}],['stutter',{mode:0,div:2,duty:55},1],['amp',{model:3,gain:25}],['cab',{cab:3}],['delay',{type:3,sync:2,fb:25,mix:15}]], stomps:{A:'stutter'}},
-  {id:'clean', n:'Studio DI Clean', d:'Clean, even and honest. A good place to start.', c:'#cdc4e6', bpm:120, A:()=>[['comp',{thr:-20,ratio:3}],['tone6',{b70:2,b2k:1}],['amp',{model:5,gain:20}],['cab',{cab:1}]]}];
+  {id:'clean', n:'Studio DI Clean', d:'Clean, even and honest. A good place to start.', c:'#cdc4e6', bpm:120, A:()=>[['comp',{thr:-20,ratio:3}],['tone6',{b70:2,b2k:1}],['amp',{model:5,gain:20}],['cab',{cab:1}]]},
+  {id:'m900', n:'Microtubes 900', d:'The Neon 900 on its Microtubes circuit. Tight grind, bright pick attack.', c:'#ffb347', bpm:150, A:()=>[['comp',{thr:-24,ratio:4,attack:6,blend:80}],['head',{circuit:0,drive:55,blend:60,mod:15,grunt:1,attack:2,tone:1,himid:2,treble:2,cab:1}]]},
+  {id:'ao900', n:'Alpha·Omega Wall', d:'The Neon 900 on Alpha·Omega. Mod leans to Omega for a raw, fuzzy wall.', c:'#ff6a4d', bpm:120, A:()=>[['gate',{thr:-56}],['head',{circuit:1,drive:70,blend:70,mod:65,grunt:2,growl:45,bite:30,tone:-1,bass:2,lomid:-2,lomidf:1,cab:1}]]}];
 UI.wiz={id:null, m:{dirt:0.5, bright:0.5, low:0.5, space:0.2, squash:0.5}};
 const WIZ_M=[['dirt','Dirt','How much grit'],['bright','Bright','Dark to sparkly'],['low','Low end','Thin to huge'],['squash','Squash','Loose to even'],['space','Space','Dry to dreamy']];
 function wizBuild(style, m){ const p=blankPreset(style.n); p.bpm=style.bpm; const mk=(list)=>list.map(([t,pp,by])=>({type:t,p:Object.assign({},pp||{}),bypass:!!by}));
@@ -94,6 +96,7 @@ function wizBuild(style, m){ const p=blankPreset(style.n); p.bpm=style.bpm; cons
   all.forEach(b=>{ const d=BLOCKS[b.type], q=b.p, def=(k)=>q[k]??d.params[k].def;
     if(d.cat==='Drive'){ if('drive' in d.params) q.drive=clampN(def('drive')+dd*70,0,100); if('sustain' in d.params) q.sustain=clampN(def('sustain')+dd*50,0,100); }
     if(b.type==='amp'){ q.gain=clampN(def('gain')+dd*40,0,100); q.treble=clampN(def('treble')+br*12,-12,12); q.bass=clampN(def('bass')+lo*10,-12,12); }
+    if(b.type==='head'){ q.drive=clampN(def('drive')+dd*60,0,100); q.blend=clampN(def('blend')+dd*40,0,100); q.treble=clampN(def('treble')+br*10,-12,12); q.bass=clampN(def('bass')+lo*10,-12,12); q.sag=clampN(def('sag')+(sq-0.5)*50,0,100); }
     if(b.type==='cab'){ q.highcut=clampN(def('highcut')*Math.pow(2,br*1.6),2000,16000); }
     if(b.type==='comp'){ q.ratio=clampN(1+sq*7,1,20); q.thr=clampN(-10-sq*22,-60,0); }
     if(b.type==='mbdrive'){ q.lows=clampN(def('lows')+lo*10,-24,12); q.squeeze=clampN(def('squeeze')+(sq-0.5)*60,0,100); }
@@ -219,6 +222,14 @@ function factoryPresetsV2(){ const out=WIZ.map(s=>wizBuild(s,{dirt:0.5,bright:0.
   out.push(mk('Pedal in the Loop',[['comp',{}],['fxloop',{}],['amp',{model:0,gain:30}],['cab',{cab:0}]]));
   return out.slice(0,24); }
 function installV2Presets(force){ const list=factoryPresetsV2(); let put=0; list.forEach((p,i)=>{ const idx=16+i; if(force||!UI.banks[idx]){ UI.banks[idx]=JSON.parse(JSON.stringify(p)); put++; } }); return put; }
+// 2.3: four Neon 900 presets go into bank 6 (empty slots only), once
+function factoryPresetsV23(){ const mk=(name,A,bpm)=>{ const p=blankPreset(name); p.A=A.map(([t,pp,by])=>({type:t,p:pp||{},bypass:!!by})); if(bpm) p.bpm=bpm; const i=p.A.findIndex(b=>b.type==='head'); if(i>=0) p.stomps.A=[{ref:'A'+i,mode:'toggle'}]; const j=p.A.findIndex(b=>['Delay','Reverb'].includes(BLOCKS[b.type].cat)); if(j>=0) p.stomps.C=[{ref:'A'+j,mode:'toggle'}]; return p; };
+  return [ mk('900 B3K Grind',[['comp',{thr:-24,ratio:4,attack:6,blend:85}],['head',{circuit:0,drive:60,blend:65,mod:0,grunt:1,attack:2,tone:2,himid:3,himidf:1,treble:1,cab:1}]],150),
+    mk('900 Vintage Warm',[['comp',{thr:-20,ratio:3,attack:20}],['head',{circuit:0,drive:40,blend:55,mod:100,grunt:2,attack:1,tone:-3,bass:2,lomid:2,lomidf:0,treble:-2,sag:45,cab:3}]],110),
+    mk('900 Alpha Punch',[['gate',{thr:-58}],['comp',{thr:-26,ratio:5,attack:4}],['head',{circuit:1,drive:65,blend:70,mod:0,grunt:1,attack:2,bite:50,tone:1,lomid:-3,lomidf:1,himid:3,himidf:2,cab:4}]],140),
+    mk('900 Omega Doom',[['head',{circuit:1,drive:85,blend:80,mod:100,grunt:2,growl:70,bite:20,tone:-2,bass:3,highcut:5500,sag:60,cab:1}],['reverb',{type:0,mix:10}]],62) ]; }
+function installV23Presets(){ let put=0, idx=40; factoryPresetsV23().forEach(p=>{ while(idx<128 && UI.banks[idx]) idx++; if(idx<128){ UI.banks[idx]=JSON.parse(JSON.stringify(p)); idx++; put++; } }); return put; }
+function v23Upgrade(){ try{ if(!localStorage.getItem(LS+'.v23')){ const n=installV23Presets(); localStorage.setItem(LS+'.v23','1'); if(n) setTimeout(()=>toast(n+' new Neon 900 amp presets in bank 6. Find the head under Amp in the block picker.', 4500), 2200); saveState(); } }catch(e){} }
 function v2Upgrade(){ try{ if(!localStorage.getItem(LS+'.v2')){ const n=installV2Presets(false); localStorage.setItem(LS+'.v2','1'); if(n) setTimeout(()=>toast(n+' new presets in banks 3 to 5. Try the Wizard and Beats pages too.', 4500), 1600); saveState(); } }catch(e){} }
 
 // ---------- Events for the new pages ----------
@@ -264,7 +275,7 @@ const _renderFoot=renderFoot; renderFoot=function(){ _renderFoot(); if(UI.stage)
 const _renderTop=renderTop; renderTop=function(){ _renderTop(); if(UI.stage) renderStage(); };
 
 // ---------- Start-up for v2: called once the rig is on ----------
-function v2Start(){ drLoad(); v2Upgrade();
+function v2Start(){ drLoad(); v2Upgrade(); v23Upgrade();
   // exclusive audio safety: if the engine clock does not move, turn exclusive mode back off and restart
   if(window.npDesktop && UI.appSet===null){ setTimeout(v2Watch, 1500); } else v2Watch(); }
 function v2Watch(){ if(!(window.npDesktop&&npDesktop.setSettings&&UI.appSet&&UI.appSet.exclusiveAudio)) return; const t0=NP.ctx.currentTime;
