@@ -274,7 +274,7 @@ window.onLooperState=(b)=>{ if(UI.page!=='looper' || b!==findLooper()) return; c
   const r=$('[data-loop="reverse"]'), h=$('[data-loop="half"]'); if(r) r.classList.toggle('on',!!s.reverse); if(h) h.classList.toggle('on',!!s.half); };
 
 // --- Tone Match ---
-PAGE_RENDER.match=()=>`<div class="lead"><div class="lead-ico">${icon('match')}</div><div><h3>Tone Match</h3><p>Sound more like a record you love. Neon Peach compares that record to your playing. Then it sets a graphic EQ to close the gap.</p></div></div>
+PAGE_RENDER.match=()=>`<div class="lead"><div class="lead-ico">${icon('match')}</div><div><h3>Tone Match</h3><p>Sound more like a record you love. It sets an EQ to close the gap.</p></div></div>
   <div class="steps"><div class="step ${UI.matchRef?'done':''}"><b>1</b><div>Load a song or bass track you like.<button class="sm" id="mref">${icon('file')}Load reference</button><span class="stat" id="mrefstat">${UI.matchRefName?esc(UI.matchRefName):'No file yet'}</span></div></div>
   <div class="step ${UI.matchMe?'done':''}"><b>2</b><div>Play your bass for 5 seconds.<button class="sm" id="mme">${icon('mic')}Listen to me</button><span class="stat" id="mmestat">${UI.matchMe?'Got it':''}</span></div></div>
   <div class="step"><b>3</b><div>Set how strong the match is, then apply it.<div class="field"><label for="mstr">Strength</label><input type="range" id="mstr" min="0" max="100" value="${UI.matchStr??80}" data-uni="1"><output>${UI.matchStr??80}%</output></div><button class="primary" id="mapply">Apply match</button></div></div></div>

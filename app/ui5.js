@@ -10,7 +10,8 @@ Object.assign(ICO, {
   paste:'<rect x="6" y="4.5" width="12" height="16" rx="2"/><path d="M9.5 4.5V3.5h5v1"/><path d="M9.5 11h5M9.5 14.5h5"/>',
   share:'<circle cx="6" cy="12" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="18" cy="18" r="2.4"/><path d="M8.2 11l7.6-4M8.2 13l7.6 4"/>',
   edit:'<path d="M4 20h4l10.5-10.5-4-4L4 16z"/><path d="M13 7l4 4"/>',
-  level:'<path d="M5 19V9M10 19V5M15 19v-7M20 19v-4"/>'
+  level:'<path d="M5 19V9M10 19V5M15 19v-7M20 19v-4"/>',
+  more:'<circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/>'
 });
 
 // ---------- navigation: a Practice group, and Library under Clone ----------
@@ -49,7 +50,7 @@ function libFilters(kindLock){ const L = UI.lib, n = (f) => NP.clones.filter(c =
   const opts = kindLock === 'ir' ? [['all', 'All IRs'], ['fav', 'Favorites']] : [['all', 'All'], ['nam', 'Amps and pedals'], ['ir', 'Cab IRs'], ['fav', 'Favorites']];
   return `<div class="seg sm lib-f">${opts.map(([k, l]) => `<button class="${L.kind === k ? 'on' : ''}" data-lkind="${k}">${l} <i>${kindLock === 'ir' && k === 'all' ? n('ir') : kindLock === 'ir' && k === 'fav' ? NP.clones.filter(c => c.fav && c.kind === 'ir').length : n(k)}</i></button>`).join('')}</div>`; }
 PAGE_RENDER.library = () => { const L = UI.lib;
-  return `<div class="lead"><div class="lead-ico">${icon('folder')}</div><div><h3>Library</h3><p>All your amp and pedal models (.nam) and cab IRs (.wav) in one place. Add a whole folder at once. Star the ones you like. Free packs from sites like ToneHunt work here.</p></div></div>
+  return `<div class="lead"><div class="lead-ico">${icon('folder')}</div><div><h3>Library</h3><p>Your .nam models and cab IRs. Drop in a whole folder.</p></div></div>
   <section class="pane libp"><div class="lib-top"><div class="lib-search">${icon('search')}<input type="search" id="lsq" placeholder="Search by name or folder" value="${esc(L.q)}" aria-label="Search the library"></div>
     <button class="sm primary" id="libfolder">${icon('folder')}Add a folder</button><button class="sm" id="libfiles">${icon('up')}Add files</button></div>
     ${L.busy ? `<div class="lib-busy"><b>${esc(L.busy)}</b><div class="lbar"><i style="width:${(L.pct || 0).toFixed(1)}%"></i></div></div>` : ''}
@@ -179,37 +180,58 @@ async function plOpenRecent(id){ const meta = PL.recent.find(s => s.id === id); 
 function plSaveMeta(){ const s = PL.song; if(!s) return; s.meta.last = {speed: PL.speed, pitch: PL.pitch, cents: PL.cents}; CDB.putIn('songs', s.meta).catch(() => {}); }
 
 PAGE_RENDER.practice = () => { const s = PL.song;
-  const recent = PL.recent.length ? `<section class="pane"><h4 class="pane-h">Your songs</h4><div class="pl-recent">${PL.recent.slice(0, 12).map(r => `<div class="pl-rs ${s && s.meta.id === r.id ? 'on' : ''}"><button class="sm" data-plopen="${r.id}">${icon('music')}${esc(r.name)}<em>${fmtTime(r.dur)}</em></button><button class="ib" data-pldel="${r.id}" title="Remove" aria-label="Remove ${esc(r.name)}">${icon('x')}</button></div>`).join('')}</div></section>` : '';
-  if(!s) return `<div class="lead"><div class="lead-ico">${icon('music')}</div><div><h3>Play along with songs</h3><p>Load a song. Slow it down without changing the pitch. Change its key. Loop the hard part. Turn the song's bass down so you can play the line yourself.</p></div></div>
-    <div class="pl-drop" id="pldrop">${icon('music')}<b>Drop a song here</b><span>mp3, wav, flac, m4a or ogg</span><button class="primary" id="plload">${icon('up')}Load a song</button></div>${recent}`;
+  const recent = PL.recent.length ? `<section class="pane"><h4 class="pane-h">Your songs</h4><div class="pl-recent">${PL.recent.slice(0, 12).map(r => `<div class="pl-rs ${s && s.meta.id === r.id ? 'on' : ''}"><button class="sm" data-plopen="${r.id}">${icon('music')}${esc(r.name)}<em>${fmtTime(r.dur).replace(/\.\d$/, '')}</em></button><button class="ib" data-pldel="${r.id}" title="Remove" aria-label="Remove ${esc(r.name)}">${icon('x')}</button></div>`).join('')}</div></section>` : '';
+  if(!s) return `<div class="pl-drop" id="pldrop"><div class="pl-drop-ring">${icon('music')}</div><b>Drop a song here</b><span>Slow it down. Change the key. Loop the hard part.</span><button class="primary" id="plload">${icon('up')}Load a song</button></div>${recent}`;
   const lp = PL.A != null && PL.B != null, sr = s.sr;
-  const loops = (s.meta.loops || []).map((l, i) => `<span class="pl-lp"><button class="sm ${lp && Math.abs(PL.A - l.a) < 10 && Math.abs(PL.B - l.b) < 10 ? 'on' : ''}" data-pllp="${i}">${esc(l.name)}</button><button class="ib xs" data-pllpdel="${i}" aria-label="Delete loop ${esc(l.name)}">${icon('x')}</button></span>`).join('');
-  return `<section class="pane pl"><div class="pl-head"><div class="pl-title">${icon('music')}<b>${esc(s.name)}</b><em>${fmtTime(s.len/sr)}</em></div><button class="sm" id="plload">${icon('up')}Load another</button></div>
+  const loops = (s.meta.loops || []).map((l, i) => `<span class="pl-lp"><button class="xs ${lp && Math.abs(PL.A - l.a) < 10 && Math.abs(PL.B - l.b) < 10 ? 'on' : ''}" data-pllp="${i}">${icon('loop')}${esc(l.name)}</button><button class="ib xs" data-pllpdel="${i}" aria-label="Delete loop ${esc(l.name)}">${icon('x')}</button></span>`).join('');
+  return `<section class="pane pl"><div class="pl-head"><div class="pl-title">${icon('music')}<b>${esc(s.name)}</b></div>${loops ? `<div class="pl-loops">${loops}</div>` : ''}<button class="sm" id="plload">${icon('up')}Load</button></div>
     <div class="pl-wave"><canvas id="plwave" aria-label="Song waveform. Click to jump. Drag to make a loop."></canvas></div>
-    <div class="pl-tr"><button class="ib" data-plj="-5" title="Back 5 seconds" aria-label="Back 5 seconds">${icon('left')}</button><button class="pl-play ${PL.playing ? 'on' : ''}" id="plplay" aria-label="${PL.playing ? 'Pause' : 'Play'}">${icon(PL.playing ? 'stop' : 'play')}<span>${PL.playing ? 'Pause' : 'Play'}</span></button><button class="ib" data-plj="5" title="Ahead 5 seconds" aria-label="Ahead 5 seconds">${icon('right')}</button>
-      <output id="pltime" class="pl-time">${fmtTime(plPos()/sr)}</output>
-      <div class="pl-ab"><button class="sm" id="plA">Set A</button><button class="sm" id="plB">Set B</button><button class="sm ${PL.loopOn ? 'on' : ''}" id="plloop" ${lp ? '' : 'disabled'}>${icon('loop')}Loop ${lp ? fmtTime(PL.A/sr) + ' to ' + fmtTime(PL.B/sr) : 'off'}</button>${lp ? `<button class="sm" id="plsave">${icon('save')}Save loop</button><button class="ib" id="plclr" title="Clear the loop" aria-label="Clear the loop">${icon('x')}</button>` : ''}</div></div>
-    ${loops ? `<div class="pl-loops">${loops}</div>` : ''}
-    <div class="pl-ctl" id="plctl">${plCtlHTML()}</div></section>${recent}
-  <p class="hint">Drag across the waveform to loop a part. Keys: Space plays and pauses, [ sets A, ] sets B, L turns the loop on and off. Speed Trainer starts slow and speeds up a little each time the loop comes around.</p>`; };
-function plCtlHTML(){ const s = PL.song;
-  return `<div class="fields">${field('Speed', 'plspd', 40, 125, 1, Math.round(PL.speed*100), Math.round(PL.speed*100) + '%')}${field('Key', 'plkey', -12, 12, 1, PL.pitch, (PL.pitch > 0 ? '+' : '') + PL.pitch + ' st')}${field('Fine tune', 'plcent', -50, 50, 1, PL.cents, (PL.cents > 0 ? '+' : '') + PL.cents + ' ¢')}${field('Song volume', 'plvol', 0, 100, 1, PL.vol, PL.vol + '%', false, true)}</div>
-    <div class="pl-row"><span class="pl-l">Song bass</span><div class="seg sm">${['As is', 'Turn it down', 'Bass only'].map((l, i) => `<button class="${PL.mode === i ? 'on' : ''}" data-plmode="${i}">${l}</button>`).join('')}</div></div>
-    <div class="pl-row"><span class="pl-l">Before play</span><button class="sm ${PL.countIn ? 'on' : ''}" id="plcount">Count in 4 at ${Math.round(NP.bpm)} bpm</button>
-      ${PL.bpm ? `<span class="pl-bpm">Song tempo about <b>${Math.round(PL.bpm*PL.speed)}</b> bpm</span><button class="sm" id="plbpm">Use it</button><button class="xs" data-plx="2">×2</button><button class="xs" data-plx="0.5">÷2</button>` : s ? '<span class="dim">Finding the tempo…</span>' : ''}</div>
-    <div class="pl-row"><span class="pl-l">Speed Trainer</span><button class="sm ${PL.trainer ? 'on' : ''}" id="pltrain">${PL.trainer ? 'On' : 'Off'}</button><span class="dim">Each loop goes ${PL.trStep}% faster, up to ${PL.trTo}%.</span><select id="pltrstep" aria-label="Trainer step">${[2, 5, 10].map(v => `<option value="${v}" ${PL.trStep === v ? 'selected' : ''}>+${v}%</option>`).join('')}</select><select id="pltrto" aria-label="Trainer goal">${[80, 90, 100, 110, 120].map(v => `<option value="${v}" ${PL.trTo === v ? 'selected' : ''}>to ${v}%</option>`).join('')}</select></div>`; }
+    <div class="pl-tr"><button class="bigplay sm ${PL.playing ? 'on' : ''}" id="plplay" aria-label="${PL.playing ? 'Pause' : 'Play'}">${icon(PL.playing ? 'stop' : 'play')}</button>
+      <div class="pl-clock"><b id="pltime">${fmtTime(plPos()/sr)}</b><span>/ ${fmtTime(s.len/sr)}</span></div>
+      <div class="pl-nudge"><button class="ib" data-plj="-5" title="Back 5 seconds" aria-label="Back 5 seconds">${icon('left')}</button><button class="ib" data-plj="5" title="Ahead 5 seconds" aria-label="Ahead 5 seconds">${icon('right')}</button></div>
+      <div class="pl-ab"><button class="abk ${PL.A != null ? 'set' : ''}" id="plA" title="Set the loop start here ( [ )">A</button><button class="abk ${PL.B != null ? 'set' : ''}" id="plB" title="Set the loop end here ( ] )">B</button>
+        <button class="sm loopk ${PL.loopOn && lp ? 'on' : ''}" id="plloop" ${lp ? '' : 'disabled'}>${icon('loop')}${lp ? fmtTime(PL.A/sr) + ' – ' + fmtTime(PL.B/sr) : 'Drag the wave to loop'}</button>${lp ? `<button class="ib" id="plsave" title="Save this loop" aria-label="Save this loop">${icon('save')}</button><button class="ib" id="plclr" title="Clear the loop" aria-label="Clear the loop">${icon('x')}</button>` : ''}</div></div></section>
+  <div class="pl-deck" id="plctl">${plCtlHTML()}</div>${recent}`; };
+function plKeyWords(st){ if(!st) return 'Original key'; const n = Math.abs(st), w = n === 1 ? 'a half step' : n === 2 ? 'a whole step' : n === 12 ? 'an octave' : n + ' half steps'; return (st > 0 ? 'Up ' : 'Down ') + w; }
+function plCtlHTML(){ const spd = Math.round(PL.speed*100);
+  return `<section class="pane bd-pane"><h4 class="pane-h">Speed</h4><div class="bd"><button class="bd-s" data-bdstep="spd:-5" aria-label="Slower">−</button><div class="bd-v" data-bd="spd" title="Drag up or down"><b>${spd}</b><i>%</i></div><button class="bd-s" data-bdstep="spd:5" aria-label="Faster">+</button></div>
+      <div class="bd-chips">${[50, 60, 70, 80, 90, 100].map(v => `<button class="xs ${spd === v ? 'on' : ''}" data-bdset="spd:${v}">${v}</button>`).join('')}</div>
+      <div class="bd-foot"><button class="sm ${PL.trainer ? 'on' : ''}" id="pltrain">${icon('spark')}Speed Trainer</button><select id="pltrstep" aria-label="Trainer step">${[2, 5, 10].map(v => `<option value="${v}" ${PL.trStep === v ? 'selected' : ''}>+${v}% a loop</option>`).join('')}</select><select id="pltrto" aria-label="Trainer goal">${[80, 90, 100, 110, 120].map(v => `<option value="${v}" ${PL.trTo === v ? 'selected' : ''}>to ${v}%</option>`).join('')}</select></div></section>
+    <section class="pane bd-pane"><h4 class="pane-h">Key</h4><div class="bd"><button class="bd-s" data-bdstep="key:-1" aria-label="Down a half step">−</button><div class="bd-v" data-bd="key" title="Drag up or down"><b>${PL.pitch > 0 ? '+' : ''}${PL.pitch}</b><i>st</i></div><button class="bd-s" data-bdstep="key:1" aria-label="Up a half step">+</button></div>
+      <div class="bd-sub">${plKeyWords(PL.pitch)}</div>
+      <div class="fields">${field('Fine tune', 'plcent', -50, 50, 1, PL.cents, (PL.cents > 0 ? '+' : '') + PL.cents + ' ¢')}</div></section>
+    <section class="pane bd-pane"><h4 class="pane-h">Mix</h4><div class="fields">${field('Song', 'plvol', 0, 100, 1, PL.vol, PL.vol + '%', false, true)}</div>
+      <div class="pl-row"><span class="pl-l">Song bass</span><div class="seg sm">${['As is', 'Lower', 'Bass only'].map((l, i) => `<button class="${PL.mode === i ? 'on' : ''}" data-plmode="${i}" title="${['The song as it is', 'Turn the song\'s bass down so you can play the line', 'Hear only the low end, to learn the line'][i]}">${l}</button>`).join('')}</div></div>
+      <div class="pl-row"><span class="pl-l">Count in</span><button class="sm ${PL.countIn ? 'on' : ''}" id="plcount">${PL.countIn ? 'On' : 'Off'} · ${Math.round(NP.bpm)} bpm</button></div>
+      <div class="pl-row"><span class="pl-l">Song tempo</span>${PL.bpm ? `<b class="pl-bpm">${Math.round(PL.bpm*PL.speed)}</b><button class="xs" id="plbpm">Use it</button><button class="xs" data-plx="2">×2</button><button class="xs" data-plx="0.5">÷2</button>` : '<span class="dim">Listening…</span>'}</div></section>`; }
+function plSetVal(kind, v, live){
+  if(kind === 'spd'){ PL.speed = clampN(Math.round(v), 40, 125)/100; } else { PL.pitch = clampN(Math.round(v), -12, 12); }
+  const el = $(`.bd-v[data-bd="${kind}"] b`); if(el) el.textContent = kind === 'spd' ? Math.round(PL.speed*100) : (PL.pitch > 0 ? '+' : '') + PL.pitch;
+  if(kind === 'key'){ const sub = $('.bd-sub'); if(sub) sub.textContent = plKeyWords(PL.pitch); }
+  $$('[data-bdset]').forEach(b => b.classList.toggle('on', +b.dataset.bdset.split(':')[1] === Math.round(PL.speed*100)));
+  const bp = $('.pl-bpm'); if(bp) bp.textContent = Math.round(PL.bpm*PL.speed);
+  clearTimeout(PL.rt); PL.rt = setTimeout(() => { plRestart(); plSaveMeta(); }, live ? 220 : 60); }
 function plPaintCtl(){ const el = $('#plctl'); if(el){ el.innerHTML = plCtlHTML(); paintRanges(el); } }
 function plPaintWave(){ const cv = $('#plwave'); if(!cv || !PL.song || !PL.peaks) return; const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; if(!w) return;
-  if(cv.width !== Math.round(w*dpr)){ cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
-  const g = cv.getContext('2d'), P = PL.peaks, L = PL.song.len, X = (s) => s/L*w; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
-  const cs = getComputedStyle(document.documentElement), peach = cs.getPropertyValue('--peach').trim() || '#ff9a66';
-  if(PL.A != null && PL.B != null){ g.fillStyle = PL.loopOn ? 'rgba(49,240,255,.14)' : 'rgba(255,255,255,.06)'; g.fillRect(X(PL.A), 0, X(PL.B) - X(PL.A), h); }
-  if(PL.drag && PL.drag.moved){ const a = Math.min(PL.drag.a, PL.drag.b), b = Math.max(PL.drag.a, PL.drag.b); g.fillStyle = 'rgba(49,240,255,.2)'; g.fillRect(X(a), 0, X(b) - X(a), h); }
-  const pos = plPos(), px = X(pos), mid = h/2;
-  for(let x = 0; x < w; x++){ const i = Math.floor(x/w*P.W), a = P.mn[i], b = P.mx[i]; g.fillStyle = x < px ? peach : '#3a4658'; g.fillRect(x, mid - b*mid*0.95, 1, Math.max(1, (b - a)*mid*0.95)); }
-  [[PL.A, 'A'], [PL.B, 'B']].forEach(([v, t]) => { if(v == null) return; g.fillStyle = '#31f0ff'; g.fillRect(X(v) - 1, 0, 2, h); g.font = '600 11px Saira, sans-serif'; g.fillText(t, X(v) + 4, 12); });
-  g.fillStyle = '#fff'; g.fillRect(px - 1, 0, 2, h); g.shadowBlur = 0;
-  const tm = $('#pltime'); if(tm) tm.textContent = fmtTime(pos/PL.song.sr); }
+  if(cv.width !== Math.round(w*dpr) || cv.height !== Math.round(h*dpr)){ cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr); }
+  const g = cv.getContext('2d'), P = PL.peaks, L = PL.song.len, sr = PL.song.sr, X = (s) => s/L*w; g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const cs = getComputedStyle(document.documentElement), peach = cs.getPropertyValue('--peach').trim() || '#ff9a66', hot = cs.getPropertyValue('--peach-hot').trim() || peach;
+  const mid = h/2 - 6, amp = mid*0.92, pos = plPos(), px = X(pos);
+  // time grid
+  g.fillStyle = '#18202b'; g.font = '500 10px Saira, sans-serif'; const step = L/sr > 240 ? 30 : L/sr > 60 ? 10 : 5;
+  for(let t = step; t < L/sr; t += step){ const x = Math.round(X(t*sr)) + 0.5; g.fillRect(x, 0, 1, h - 12); g.fillStyle = '#4a5566'; g.fillText(fmtTime(t).replace(/\.\d$/, ''), x + 3, h - 2); g.fillStyle = '#18202b'; }
+  // loop band
+  const band = (a, b, on) => { g.fillStyle = on ? 'rgba(49,240,255,.10)' : 'rgba(255,255,255,.05)'; g.fillRect(X(a), 0, X(b) - X(a), h - 12); if(on){ g.fillStyle = '#31f0ff'; g.shadowColor = '#31f0ff'; g.shadowBlur = 8; g.fillRect(X(a), 0, X(b) - X(a), 2); g.shadowBlur = 0; } };
+  if(PL.A != null && PL.B != null) band(PL.A, PL.B, PL.loopOn);
+  if(PL.drag && PL.drag.moved) band(Math.min(PL.drag.a, PL.drag.b), Math.max(PL.drag.a, PL.drag.b), true);
+  // the wave: mirrored bars, lit up to the playhead
+  const bw = 2, gap = 1, cols = Math.floor(w/(bw + gap)), grad = g.createLinearGradient(0, mid - amp, 0, mid + amp); grad.addColorStop(0, hot); grad.addColorStop(0.5, peach); grad.addColorStop(1, hot);
+  const draw = (lit) => { g.beginPath(); for(let c = 0; c < cols; c++){ const x = c*(bw + gap); if((x < px) !== lit) continue; const i0 = Math.floor(x/w*P.W), i1 = Math.max(i0 + 1, Math.floor((x + bw + gap)/w*P.W)); let a = 0, b = 0; for(let i = i0; i < i1 && i < P.W; i++){ a = Math.min(a, P.mn[i]); b = Math.max(b, P.mx[i]); } const v = Math.max(1, Math.max(-a, b)*amp); g.rect(x, mid - v, bw, v*2); } };
+  g.fillStyle = '#2b3646'; draw(false); g.fill();
+  g.save(); g.shadowColor = peach; g.shadowBlur = 10; g.fillStyle = grad; draw(true); g.fill(); g.restore();
+  [[PL.A, 'A'], [PL.B, 'B']].forEach(([v, t]) => { if(v == null) return; const x = X(v); g.fillStyle = '#31f0ff'; g.fillRect(x - 1, 0, 2, h - 12); g.beginPath(); g.moveTo(x - 1, 0); g.lineTo(x + 11, 0); g.lineTo(x + 11, 12); g.lineTo(x - 1, 16); g.fill(); g.fillStyle = '#021014'; g.font = '700 10px Saira, sans-serif'; g.fillText(t, x + 2, 10); });
+  g.save(); g.shadowColor = '#fff'; g.shadowBlur = 12; g.fillStyle = '#fff'; g.fillRect(px - 1, 0, 2, h - 12); g.restore();
+  const tm = $('#pltime'); if(tm) tm.textContent = fmtTime(pos/sr); }
 (function plTick(){ if(UI.page === 'practice' && PL.song && (PL.playing || PL.drag)) plPaintWave(); requestAnimationFrame(plTick); })();
 function plWaveSample(e){ const cv = $('#plwave'), r = cv.getBoundingClientRect(); return clampN((e.clientX - r.left)/r.width, 0, 1)*PL.song.len; }
 
@@ -253,11 +275,11 @@ PAGE_RENDER.record = () => { const k = UI.rk, busy = k.on || k.reamp;
     return `<div class="take ${pl || lp ? 'on' : ''}"><div class="tk-main"><div class="tk-name">${esc(t.name)}</div><div class="tk-sub">${fmtTime(t.dur)} · ${esc(t.preset || '')} · ${t.bpm || ''} bpm · ${new Date(t.made).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'})}</div></div>
     <div class="tk-act"><button class="sm ${pl && k.play.what === 'mix' ? 'on' : ''}" data-tkplay="${t.id}" ${busy ? 'disabled' : ''}>${icon(pl && k.play.what === 'mix' ? 'stop' : 'play')}Play</button><button class="sm ${pl && k.play.what === 'di' ? 'on' : ''}" data-tkdi="${t.id}" ${busy ? 'disabled' : ''} title="Hear the clean bass with no effects">Clean</button>
       <button class="sm ${lp ? 'on' : ''}" data-tkloop="${t.id}" ${busy ? 'disabled' : ''} title="Play the clean bass through this preset on a loop while you turn knobs">${icon('loop')}Tweak</button><button class="sm" data-tkre="${t.id}" ${busy ? 'disabled' : ''} title="Record the clean bass through this preset as a new take">${icon('refresh')}Re-amp</button>
-      <button class="ib" data-tksave="${t.id}" title="Save as a WAV file" aria-label="Save ${esc(t.name)}">${icon('down')}</button><button class="ib" data-tksavedi="${t.id}" title="Save the clean DI as a WAV file" aria-label="Save clean DI">DI</button><button class="ib" data-tkren="${t.id}" title="Rename" aria-label="Rename">${icon('edit')}</button><button class="ib danger" data-tkdel="${t.id}" title="Delete" aria-label="Delete ${esc(t.name)}">${icon('trash')}</button></div></div>`; };
-  return `<div class="lead"><div class="lead-ico">${icon('rec')}</div><div><h3>Record</h3><p>Every take keeps your clean bass too. Later, press Re-amp to put that same playing through a different preset. Press Tweak to loop it while you dial in a sound.</p></div></div>
-  <section class="pane rk"><div class="rk-big"><button class="rk-btn ${k.on && !k.reamp ? 'on' : ''}" id="rkgo" ${k.reamp ? 'disabled' : ''} aria-label="${k.on ? 'Stop recording' : 'Record'}">${icon(k.on && !k.reamp ? 'stop' : 'rec')}</button>
+      <button class="ib ${k.more === t.id ? 'on' : ''}" data-tkmore="${t.id}" title="More" aria-label="More for ${esc(t.name)}" aria-expanded="${k.more === t.id}">${icon('more')}</button></div>
+    ${k.more === t.id ? `<div class="tk-more"><button class="xs" data-tksave="${t.id}">${icon('down')}Save as WAV</button><button class="xs" data-tksavedi="${t.id}">${icon('down')}Save clean DI</button><button class="xs" data-tkren="${t.id}">${icon('edit')}Rename</button><button class="xs danger" data-tkdel="${t.id}">${icon('trash')}Delete</button></div>` : ''}</div>`; };
+  return `<section class="pane rk"><div class="rk-big"><button class="rk-btn ${k.on && !k.reamp ? 'on' : ''}" id="rkgo" ${k.reamp ? 'disabled' : ''} aria-label="${k.on ? 'Stop recording' : 'Record'}">${icon(k.on && !k.reamp ? 'stop' : 'rec')}</button>
     <div><div class="rk-state" id="rkstate">${k.reamp ? 'Re-amping through ' + esc(NP.preset.name) : k.on ? 'Recording' : 'Ready'}</div><div class="rk-time" id="rktime">${k.on ? fmtTime(NP.ctx.currentTime - k.t0) : '0:00.0'}</div>
-    <div class="dim">Records what you hear, songs and Beats included. The clean take is only your bass. Key: Shift+R.</div>${k.reamp ? '<button class="sm danger" id="rkcancel">Stop re-amp</button>' : ''}</div></div></section>
+    <div class="dim">Every take keeps your clean bass, so you can re-amp it later. Shift+R.</div>${k.reamp ? '<button class="sm danger" id="rkcancel">Stop re-amp</button>' : ''}</div></div></section>
   <section class="pane"><h4 class="pane-h">Takes<em>${k.takes.length ? (IS_APP ? 'Saved on this computer' : 'Kept in this browser') : ''}</em></h4>${k.takes.length ? k.takes.map(row).join('') : '<p class="dim">No takes yet.</p>'}</section>`; };
 setInterval(() => { const k = UI.rk; if(UI.page === 'record' && k.on){ const el = $('#rktime'); if(el) el.textContent = fmtTime(NP.ctx.currentTime - k.t0); } }, 100);
 
@@ -343,6 +365,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if(c('#plsave')){ const s = PL.song; prompt2('Name this loop', 'Part ' + ((s.meta.loops || []).length + 1), v => { (s.meta.loops = s.meta.loops || []).push({name: v.trim() || 'Loop', a: PL.A, b: PL.B}); plSaveMeta(); renderPage(); }); return; }
     if(c('[data-pllp]')){ const l = PL.song.meta.loops[+x.dataset.pllp]; if(l){ PL.A = l.a; PL.B = l.b; PL.loopOn = true; plSyncLoop(); if(PL.playing) plPlay(l.a); else PL.pos = l.a; renderPage(); } return; }
     if(c('[data-pllpdel]')){ PL.song.meta.loops.splice(+x.dataset.pllpdel, 1); plSaveMeta(); renderPage(); return; }
+    if(c('[data-bdstep]')){ const [k, d] = x.dataset.bdstep.split(':'); plSetVal(k, (k === 'spd' ? PL.speed*100 : PL.pitch) + (+d)); return; }
+    if(c('[data-bdset]')){ const [k, v] = x.dataset.bdset.split(':'); plSetVal(k, +v); return; }
     if(c('[data-plmode]')){ PL.mode = +x.dataset.plmode; plGraph(); plTone(); plPaintCtl(); return; }
     if(c('#plcount')){ PL.countIn = !PL.countIn; plPaintCtl(); return; }
     if(c('#plbpm')){ setBpm(Math.round(PL.bpm*PL.speed)); plPaintCtl(); toast('Tempo set to ' + Math.round(NP.bpm) + ' bpm. Delays and Beats follow it.', 2600); return; }
@@ -353,6 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // recorder
     if(c('#rkgo')){ if(UI.rk.on) recStop(); else recStart(); return; }
     if(c('#rkcancel')){ takeCancelReamp(); return; }
+    if(c('[data-tkmore]')){ UI.rk.more = UI.rk.more === x.dataset.tkmore ? null : x.dataset.tkmore; renderPage(); return; }
     if(c('[data-tkplay]')){ takePlay(x.dataset.tkplay, 'mix'); return; }
     if(c('[data-tkdi]')){ takePlay(x.dataset.tkdi, 'di'); return; }
     if(c('[data-tkloop]')){ takeLoopDI(x.dataset.tkloop); return; }
@@ -376,6 +401,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   pedal.addEventListener('change', e => { const id = e.target.id; if(id === 'pltrstep') PL.trStep = +e.target.value; else if(id === 'pltrto') PL.trTo = +e.target.value; else return; plPaintCtl(); });
   // waveform: click to jump, drag to loop
+  // big readouts: drag up or down to change them
+  pedal.addEventListener('pointerdown', e => { const v = e.target.closest('.bd-v'); if(!v) return; e.preventDefault(); v.setPointerCapture(e.pointerId); const k = v.dataset.bd; PL.bd = {k, y: e.clientY, v0: k === 'spd' ? PL.speed*100 : PL.pitch}; v.classList.add('drag'); });
+  pedal.addEventListener('pointermove', e => { const d = PL.bd; if(!d) return; const dy = d.y - e.clientY, per = d.k === 'spd' ? 3 : 12; plSetVal(d.k, d.v0 + Math.trunc(dy/per)*(d.k === 'spd' ? 1 : 1), true); });
+  pedal.addEventListener('pointerup', () => { if(!PL.bd) return; PL.bd = null; $$('.bd-v.drag').forEach(x => x.classList.remove('drag')); });
+  pedal.addEventListener('wheel', e => { const v = e.target.closest('.bd-v'); if(!v) return; e.preventDefault(); const k = v.dataset.bd; plSetVal(k, (k === 'spd' ? PL.speed*100 : PL.pitch) + (e.deltaY < 0 ? 1 : -1), true); }, {passive: false});
   pedal.addEventListener('pointerdown', e => { if(e.target.id !== 'plwave' || !PL.song) return; e.target.setPointerCapture(e.pointerId); const p = plWaveSample(e); PL.drag = {a: p, b: p, x: e.clientX, moved: false}; });
   pedal.addEventListener('pointermove', e => { const d = PL.drag; if(!d || e.target.id !== 'plwave') return; d.b = plWaveSample(e); if(Math.abs(e.clientX - d.x) > 6) d.moved = true; });
   pedal.addEventListener('pointerup', e => { const d = PL.drag; if(!d) return; PL.drag = null;

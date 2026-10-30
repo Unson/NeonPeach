@@ -82,7 +82,10 @@ const NAM = fs.readFileSync(process.env.NAMFILE || '/home/claude/ref/NeuralAmpMo
   ok(r.pk2 > 0.05, 'a key change still plays');
   ok(r.still, 'pause holds the place');
   ok(r.songs >= 1, 'the song is kept in Your songs');
-  await E(() => { go('practice'); }); await shot('practice');
+  r = await E(async () => { go('practice'); PL.speed = 1; PL.pitch = 0; renderPage(); document.querySelector('[data-bdstep="spd:-5"]').click(); document.querySelector('[data-bdstep="key:1"]').click(); document.querySelector('[data-bdset="spd:70"]').click(); await sleep(150);
+    return {spd: PL.speed, key: PL.pitch, shown: document.querySelector('.bd-v[data-bd="spd"] b').textContent, words: document.querySelector('.bd-sub').textContent}; });
+  ok(r.spd === 0.7 && r.key === 1 && r.shown === '70' && r.words === 'Up a half step', 'the big Speed and Key readouts change with their buttons (' + r.shown + '%, ' + r.words + ')');
+  await shot('practice');
 
   // ---- 6. recorder, takes and re-amp
   r = await E(async () => { loadPreset({name: 'Grit', A: [{type: 'b3k', p: {drive: 70}, bypass: false}], B: []}); toggleDemo(); recStart(); await sleep(1500); await recStop(); toggleDemo(); await sleep(100);
