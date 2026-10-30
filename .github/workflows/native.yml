@@ -1,0 +1,36 @@
+name: native-engine
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, arch: x64, name: win32-x64 }
+          - { os: macos-14, arch: arm64, name: darwin-arm64 }
+          - { os: macos-14, arch: x64, name: darwin-x64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Get RtAudio 6.0.1 (MIT, includes the ASIO SDK files)
+        shell: bash
+        run: |
+          git clone -q --depth 1 --branch 6.0.1 https://github.com/thestk/rtaudio native/third_party/rtaudio
+          git -C native/third_party/rtaudio log -1 --format='%H'
+      - name: Build
+        shell: bash
+        working-directory: native
+        run: |
+          npm install --no-audit --no-fund
+          npx --yes node-gyp@11.2.0 rebuild --arch=${{ matrix.arch }}
+          mkdir -p ../out/${{ matrix.name }} && cp build/Release/npaudio.node ../out/${{ matrix.name }}/
+      - name: Smoke test
+        if: matrix.arch != 'x64' || runner.os == 'Windows'
+        shell: bash
+        run: node native/test/smoke.js out/${{ matrix.name }}/npaudio.node
+      - uses: actions/upload-artifact@v4
+        with: { name: npaudio-${{ matrix.name }}, path: out/${{ matrix.name }}/npaudio.node }

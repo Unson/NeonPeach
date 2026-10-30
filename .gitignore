@@ -1,0 +1,7 @@
+node_modules/
+out/
+dist/
+release/
+dist-out/
+build/
+native/third_party/
