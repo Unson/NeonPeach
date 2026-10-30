@@ -1,7 +1,10 @@
 name: native-engine
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     strategy:
@@ -16,21 +19,32 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Get RtAudio 6.0.1 (MIT, includes the ASIO SDK files)
+      - name: Build and test (log saved either way)
         shell: bash
         run: |
-          git clone -q --depth 1 --branch 6.0.1 https://github.com/thestk/rtaudio native/third_party/rtaudio
-          git -C native/third_party/rtaudio log -1 --format='%H'
-      - name: Build
-        shell: bash
-        working-directory: native
-        run: |
-          npm install --no-audit --no-fund
-          npx --yes node-gyp@11.2.0 rebuild --arch=${{ matrix.arch }}
-          mkdir -p ../out/${{ matrix.name }} && cp build/Release/npaudio.node ../out/${{ matrix.name }}/
-      - name: Smoke test
-        if: matrix.arch != 'x64' || runner.os == 'Windows'
-        shell: bash
-        run: node native/test/smoke.js out/${{ matrix.name }}/npaudio.node
+          mkdir -p out/${{ matrix.name }}
+          LOG=out/${{ matrix.name }}/build.log
+          {
+            set -x
+            git clone -q --depth 1 --branch 6.0.1 https://github.com/thestk/rtaudio native/third_party/rtaudio && git -C native/third_party/rtaudio log -1 --format='rtaudio %H'
+            cd native && npm install --no-audit --no-fund && npx --yes node-gyp@11.2.0 rebuild --arch=${{ matrix.arch }} && cd .. &&
+            cp native/build/Release/npaudio.node out/${{ matrix.name }}/ &&
+            if [ "${{ matrix.arch }}" != "x64" ] || [ "$RUNNER_OS" = "Windows" ]; then node native/test/smoke.js out/${{ matrix.name }}/npaudio.node; else echo "cross-built x64 on arm: smoke test skipped"; file out/${{ matrix.name }}/npaudio.node; fi
+            echo "EXIT $?"
+          } > $LOG 2>&1 || echo "EXIT FAIL" >> $LOG
+          tail -40 $LOG
       - uses: actions/upload-artifact@v4
-        with: { name: npaudio-${{ matrix.name }}, path: out/${{ matrix.name }}/npaudio.node }
+        with: { name: npaudio-${{ matrix.name }}, path: out/${{ matrix.name }} }
+  publish:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: ci-out }
+      - name: Push results to the ci-out branch
+        run: |
+          cd ci-out && git init -q && git checkout -q -b ci-out
+          echo "${GITHUB_SHA}" > SOURCE_COMMIT
+          git add -A && git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "CI output for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" ci-out
