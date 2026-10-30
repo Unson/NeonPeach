@@ -139,22 +139,31 @@ struct Crusher : Proc {
 struct Looper : Proc {
   int64_t max; std::unique_ptr<float[]> buf[2]; std::vector<float> undo[2]; bool hasUndo = false;
   int64_t len = 0, pos = 0; double fpos = 0; std::string state = "empty"; bool rev = false, half = false; int tick = 0;
+  int64_t bar = 0, target = 0, armAt = 0; std::string after = "play";
+  void endRec(const std::string& next){
+    if(bar > 0 && pos > 0){ int64_t mb = (max/bar)*bar; if(mb <= 0) mb = bar; int64_t t = std::min(mb, std::max(bar, (int64_t)std::llround((double)pos/bar)*bar));
+      if(t > pos){ target = t; after = next; return; }
+      len = t; pos = next == "stop" ? 0 : pos - t; fpos = (double)pos; state = next; return; }
+    len = pos; pos = 0; fpos = 0; state = next; }
   Looper(){ max = 0; }
   void init(const ValueP&) override { max = (int64_t)std::floor(sr*180); }
   std::vector<PDesc> desc() const override { return {{"level",1,0,2,false},{"feedback",1,0,1,false}}; }
   void snap(){ for(int c = 0; c < 2; c++) undo[c].assign(buf[c].get(), buf[c].get() + len); hasUndo = true; }
-  void report(){ auto m = Value::obj(); m->set("state", Value::str(state)); m->set("len", Value::num((double)len)); m->set("pos", Value::num((double)pos)); m->set("sr", Value::num(sr)); m->set("reverse", Value::boolean(rev)); m->set("half", Value::boolean(half)); m->set("hasUndo", Value::boolean(hasUndo)); post(m); }
+  void report(){ auto m = Value::obj(); m->set("state", Value::str(state)); m->set("len", Value::num((double)len)); m->set("pos", Value::num((double)pos)); m->set("sr", Value::num(sr)); m->set("reverse", Value::boolean(rev)); m->set("half", Value::boolean(half)); m->set("hasUndo", Value::boolean(hasUndo)); m->set("target", Value::num((double)target)); m->set("bar", Value::num((double)bar)); post(m); }
   void message(const ValueP& m, std::shared_ptr<void>) override {
     std::string cmd = m->strOr("cmd", ""); const std::string s = state;
     if(cmd == "kill"){ dead = true; buf[0].reset(); buf[1].reset(); undo[0].clear(); undo[1].clear(); return; }
+    if(m->get("bar")) bar = std::max<int64_t>(0, (int64_t)std::floor(m->numOr("bar", 0)));
     if(cmd == "rec"){
-      if(s == "empty"){ if(!buf[0]){ buf[0].reset(new float[max]); buf[1].reset(new float[max]); } state = "rec"; len = 0; pos = 0; }
-      else if(s == "rec"){ len = pos; pos = 0; state = "play"; }
+      if(s == "empty" || s == "arm"){ if(!buf[0]){ buf[0].reset(new float[max]); buf[1].reset(new float[max]); } len = 0; pos = 0; target = 0;
+        double at = m->numOr("at", 0); int64_t nowF = (int64_t)std::llround(time()*sr);
+        if(s == "empty" && at > nowF){ state = "arm"; armAt = (int64_t)at; } else state = "rec"; }
+      else if(s == "rec"){ endRec("play"); }
       else if(s == "play"){ snap(); state = "over"; }
       else if(s == "over") state = "play";
       else if(s == "stop"){ snap(); pos = 0; fpos = 0; state = "over"; } }
-    else if(cmd == "play"){ if(s == "rec"){ len = pos; pos = 0; state = "play"; } else if(len > 0){ if(s == "over") state = "play"; else if(s == "stop"){ pos = 0; fpos = 0; state = "play"; } } }
-    else if(cmd == "stop"){ if(s == "rec"){ len = pos; state = "stop"; } else if(len > 0) state = "stop"; }
+    else if(cmd == "play"){ if(s == "rec"){ endRec("play"); } else if(s == "arm"){ state = "empty"; } else if(len > 0){ if(s == "over") state = "play"; else if(s == "stop"){ pos = 0; fpos = 0; state = "play"; } } }
+    else if(cmd == "stop"){ if(s == "rec"){ endRec("stop"); } else if(s == "arm"){ state = "empty"; } else if(len > 0) state = "stop"; }
     else if(cmd == "clear"){ state = "empty"; len = 0; pos = 0; fpos = 0; undo[0].clear(); undo[1].clear(); hasUndo = false; buf[0].reset(); buf[1].reset(); }
     else if(cmd == "undo"){ if(hasUndo){ for(int c = 0; c < 2; c++) std::memcpy(buf[c].get(), undo[c].data(), sizeof(float)*std::min<int64_t>(len, undo[c].size())); undo[0].clear(); undo[1].clear(); hasUndo = false; } }
     else if(cmd == "reverse") rev = !rev;
@@ -162,9 +171,11 @@ struct Looper : Proc {
     report(); }
   bool process(Bus& in, int inCh, Bus& out, int n) override {
     if(dead) return false; double lvl = p(0), fb = p(1); bool hasIn = inCh > 0;
+    const int64_t f0 = (int64_t)std::llround(time()*sr);
     for(int i = 0; i < n; i++){
       float xL = hasIn ? in.d[0][i] : 0, xR = hasIn ? IN(1)[i] : 0; float lL = 0, lR = 0;
-      if(state == "rec"){ if(pos < max){ buf[0][pos] = xL; buf[1][pos] = xR; pos++; } else { len = pos; pos = 0; state = "play"; } }
+      if(state == "arm" && f0 + i >= armAt){ state = "rec"; tick = 1 << 30; }
+      if(state == "rec"){ if(pos < max){ buf[0][pos] = xL; buf[1][pos] = xR; pos++; if(target && pos >= target){ len = target; target = 0; pos = 0; fpos = 0; state = after; tick = 1 << 30; } } else { len = pos; pos = 0; fpos = 0; target = 0; state = "play"; } }
       else if((state == "play" || state == "over") && len > 0){
         double rp = half ? fpos : (double)pos; int64_t idx = rev ? (len - 1 - (int64_t)std::floor(rp)) : (int64_t)std::floor(rp); idx = ((idx % len) + len) % len;
         lL = buf[0][idx]; lR = buf[1][idx];
@@ -185,7 +196,7 @@ struct Recorder : Proc {
     if(cmd == "start"){ chunks[0].clear(); chunks[1].clear(); on = true; }
     else if(cmd == "stop"){ on = false; std::vector<float> L, R; for(auto& k : chunks[0]) L.insert(L.end(), k.begin(), k.end()); for(auto& k : chunks[1]) R.insert(R.end(), k.begin(), k.end());
       auto o = Value::obj(); o->set("done", Value::boolean(true)); o->set("L", Value::f32(std::move(L))); o->set("R", Value::f32(std::move(R))); o->set("sr", Value::num(sr)); post(o); chunks[0].clear(); chunks[1].clear(); } }
-  bool process(Bus& in, int inCh, Bus& out, int n) override { if(dead) return false; if(on && inCh){ push(0, in.d[0], n); push(1, IN(1), n); } (void)out; return true; }
+  bool process(Bus& in, int inCh, Bus& out, int n) override { if(dead) return false; if(on){ if(inCh){ push(0, in.d[0], n); push(1, IN(1), n); } else { static const float z[MAXQ] = {0}; push(0, z, n); push(1, z, n); } } (void)out; return true; }
 };
 
 // ---------------------------------------------------------------- meter

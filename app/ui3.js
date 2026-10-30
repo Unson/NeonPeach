@@ -11,17 +11,22 @@ function simdOK(){ try{ return WebAssembly.validate(new Uint8Array(NAM_WASM)); }
 // ---------- storage (IndexedDB, with memory as the fallback) ----------
 const CDB = { db: null, failed: false,
   open(){ return new Promise(res => { if(CDB.db || CDB.failed || !window.indexedDB){ res(CDB.db); return; }
-    let r; try{ r = indexedDB.open('neonpeach', 1); }catch(e){ CDB.failed = true; res(null); return; }
-    r.onupgradeneeded = () => { const db = r.result; if(!db.objectStoreNames.contains('clones')) db.createObjectStore('clones', {keyPath: 'id'}); };
+    let r; try{ r = indexedDB.open('neonpeach', 2); }catch(e){ CDB.failed = true; res(null); return; }
+    r.onupgradeneeded = () => { const db = r.result; ['clones', 'takes', 'takeAudio', 'songs', 'songData'].forEach(n => { if(!db.objectStoreNames.contains(n)) db.createObjectStore(n, {keyPath: 'id'}); }); };
     r.onsuccess = () => { CDB.db = r.result; res(CDB.db); }; r.onerror = () => { CDB.failed = true; res(null); }; r.onblocked = () => { CDB.failed = true; res(null); }; }); },
-  tx(mode, fn){ return CDB.open().then(db => new Promise((res, rej) => { if(!db){ res(null); return; } const t = db.transaction('clones', mode), s = t.objectStore('clones'); const q = fn(s); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); })); },
+  tx(mode, fn, store){ store = store || 'clones'; return CDB.open().then(db => new Promise((res, rej) => { if(!db){ res(null); return; } const t = db.transaction(store, mode), s = t.objectStore(store); const q = fn(s); t.oncomplete = () => res(q && q.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error); })); },
   all(){ return CDB.tx('readonly', s => s.getAll()).then(r => r || []); },
   put(rec){ const clean = Object.assign({}, rec); delete clean._desc; return CDB.tx('readwrite', s => s.put(clean)); },
-  del(id){ return CDB.tx('readwrite', s => s.delete(id)); }
+  del(id){ return CDB.tx('readwrite', s => s.delete(id)); },
+  // other stores: recorded takes and practice songs
+  allIn(st){ return CDB.tx('readonly', s => s.getAll(), st).then(r => r || []); },
+  getIn(st, id){ return CDB.tx('readonly', s => s.get(id), st); },
+  putIn(st, rec){ return CDB.tx('readwrite', s => s.put(rec), st); },
+  delIn(st, id){ return CDB.tx('readwrite', s => s.delete(id), st); }
 };
 NP.clones = [];
 async function loadClones(){ try{ NP.clones = (await CDB.all()).sort((a, b) => a.made - b.made); }catch(e){ NP.clones = []; } refreshCloneBlocks(); if(UI.page === 'clone') renderPage(); }
-function refreshCloneBlocks(){ [...NP.paths.A, ...NP.paths.B].forEach(b => { if(b.type === 'clone') applyBlock(b); }); }
+function refreshCloneBlocks(){ [...NP.paths.A, ...NP.paths.B].forEach(b => { if(b.type === 'clone' || b.type === 'cab' || b.type === 'cab2') applyBlock(b); }); }
 async function saveClone(rec){ const i = NP.clones.findIndex(c => c.id === rec.id); if(i >= 0) NP.clones[i] = rec; else NP.clones.push(rec);
   try{ await CDB.put(rec); }catch(e){ toast('This clone could not be saved in the browser. Export it to keep it.', 4200); }
   refreshCloneBlocks(); }

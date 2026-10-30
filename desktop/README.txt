@@ -14,6 +14,30 @@ HOW TO RUN
 No bass handy? Press "Hear it" on the Wizard page, or open Settings > Audio
 and press "Play the demo riff".
 
+NEW IN 2.2: THE BEDROOM KIT
+- Songs (Practice > Songs): load any song. Drag across the waveform to
+  loop a hard part. Slow it down without changing the pitch. Change its
+  key. "Turn it down" cuts the song's bass so you play the line. "Bass
+  only" lets you hear the line clearly. Speed Trainer starts slow and
+  speeds up a bit each time the loop comes around. It also guesses the
+  song's tempo, so delays and Beats can match it.
+- Record (Practice > Record, or Shift+R): every take keeps your clean bass
+  too. Re-amp puts that same playing through a different preset. Tweak
+  loops your clean take through the chain while you turn knobs. Save the
+  mix or the clean DI as a WAV.
+- Library (Clone > Library): add a whole folder of .nam models and .wav
+  cab IRs at once. Search them. Star your favorites. In a Cabinet or
+  Clone block, press Browse to pick one.
+- Dual Cab block: two cabinets at once. Blend them or spread them wide.
+- No gap when you change presets. Delay and reverb tails keep ringing.
+  A loop you recorded comes with you to the next preset.
+- Looper: "Lock to tempo" snaps loops to whole bars. With Beats playing,
+  recording starts on bar 1.
+- Even levels: on the Chain page, press Match level and play for 6
+  seconds. Do it on each preset and they come out the same loudness.
+- Copy a block (Copy button or Ctrl+C) and paste it into any preset.
+- Presets > Share gives a short code. A friend pastes it to get the preset.
+
 NEW IN 2.1: THE LOW-DELAY ENGINE
 - Neon Peach now has its own audio engine, written in C++. It talks to
   your audio interface directly: through ASIO on Windows, and Core Audio

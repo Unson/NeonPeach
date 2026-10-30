@@ -7,7 +7,7 @@
   const needPower = () => { if(NP.ready) return false; toast('Press the power button first.'); return true; };
 
   // ---- menu commands ----
-  const pages = ['chain', 'presets', 'wizard', 'scenes', 'stomp', 'tuner', 'looper', 'drums', 'clone', 'match', 'io', 'outs', 'midi', 'global', 'help'];
+  const pages = ['chain', 'presets', 'wizard', 'scenes', 'stomp', 'tuner', 'looper', 'drums', 'clone', 'match', 'io', 'outs', 'midi', 'global', 'help', 'practice', 'record', 'library'];
   D.onMenu(cmd => {
     if(cmd === 'power'){ const b = document.getElementById('power'); if(b && !NP.ctx) b.click(); return; }
     if(cmd === 'undo' || cmd === 'redo'){ if(isTextField(document.activeElement)){ document.execCommand(cmd); return; } if(needPower()) return; if(cmd === 'undo') undo(); else redo(); return; }
@@ -19,6 +19,8 @@
     if(cmd === 'record'){ toggleRecord(); return; }
     if(cmd === 'mute'){ NP.globals.mute = NP.globals.mute ? 0 : 1; applyGlobals(); renderFoot(); toast(NP.globals.mute ? 'Everything muted' : 'Sound on'); return; }
     if(cmd === 'tuner'){ toggleTuner(); return; }
+    if(cmd === 'take'){ if(needPower()) return; if(UI.rk.on && !UI.rk.reamp) recStop(); else recStart(); toast(UI.rk.on ? 'Recording a take' : 'Take kept', 1200); return; }
+    if(cmd === 'song'){ if(needPower()) return; pickFile('audio/*,.mp3,.wav,.flac,.m4a,.ogg').then(plLoadFile); return; }
     if(cmd === 'demo'){ toggleDemo(); if(UI.page === 'io') renderPage(); toast(UI.demoOn ? 'Demo riff playing' : 'Demo riff stopped'); return; }
     if(cmd === 'backup'){ backup(true); return; }
     if(cmd === 'stage'){ if(UI.stage) closeStage(); else openStage(); return; }

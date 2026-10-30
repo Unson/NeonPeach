@@ -84,6 +84,17 @@ def('tilt', { name:'Tilt EQ', cat:'EQ', desc:'One knob. Turn left for darker, ri
   build(ctx,b){ const n=b.n; n.lo=ctx.createBiquadFilter(); n.lo.type='lowshelf'; n.hi=ctx.createBiquadFilter(); n.hi.type='highshelf'; n.l=ctx.createGain(); b.wetIn.connect(n.lo).connect(n.hi).connect(n.l).connect(b.wetOut); },
   apply(b){ const n=b.n,p=b.p; n.lo.frequency.value=p.center; n.hi.frequency.value=p.center; n.lo.gain.value=-p.tilt/2; n.hi.gain.value=p.tilt/2; setP(n.l.gain,dB(p.level)); } });
 
+// --- Dual Cab: two cabinets at once, like two mics on two speakers ---
+def('cab2', { name:'Dual Cab', cat:'Cab', desc:'Two cabinets at once. Blend them, or spread them wide.',
+  params:{ cabA:E('Cab A',CAB_NAMES,0), idA:{l:'IR A id', def:'', hidden:true}, cabB:E('Cab B',CAB_NAMES,2), idB:{l:'IR B id', def:'', hidden:true}, blend:P('Blend',0,100,50,'%'), width:P('Width',0,100,0,'%'), align:P('B Delay',0,2,0,'ms'), flip:B('Flip B phase',0), lowcut:P('Low Cut',20,300,40,'Hz'), highcut:P('High Cut',2000,16000,9000,'Hz'), level:P('Level',-24,12,0,'dB') },
+  build(ctx,b){ const n=b.n; n.cvA=ctx.createConvolver(); n.cvB=ctx.createConvolver(); n.cvA.normalize=true; n.cvB.normalize=true; n.gA=ctx.createGain(); n.gB=ctx.createGain(); n.dB=ctx.createDelay(0.01); n.pA=ctx.createStereoPanner(); n.pB=ctx.createStereoPanner();
+    n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lvl=ctx.createGain(); n.curA=n.curB=null;
+    b.wetIn.connect(n.cvA).connect(n.gA).connect(n.pA).connect(n.hp); b.wetIn.connect(n.dB).connect(n.cvB).connect(n.gB).connect(n.pB).connect(n.hp); n.hp.connect(n.lp).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; const ka=cabKey(p,'cabA','idA'), kb=cabKey(p,'cabB','idB');
+    if(ka!==n.curA){ n.curA=ka; n.cvA.buffer=cabBuffer(p.cabA,p.idA); } if(kb!==n.curB){ n.curB=kb; n.cvB.buffer=cabBuffer(p.cabB,p.idB); }
+    const t=p.blend/100; setP(n.gA.gain,Math.cos(t*Math.PI/2)*1.2); setP(n.gB.gain,Math.sin(t*Math.PI/2)*1.2*(p.flip?-1:1));
+    n.pA.pan.value=-p.width/100; n.pB.pan.value=p.width/100; n.dB.delayTime.value=p.align/1000; n.hp.frequency.value=p.lowcut; n.lp.frequency.value=p.highcut; setP(n.lvl.gain,dB(p.level)); } });
+
 // --- FX Loop: send to a real pedal through spare interface jacks, and bring it back ---
 const LOOP_OUTS=['Out 3-4','Out 5-6','Out 7-8'];
 function fxMonoInput(){ try{ const t=typeof UI!=='undefined'&&UI.stream&&UI.stream.getAudioTracks()[0], s=t&&t.getSettings&&t.getSettings(); return !!(s&&s.channelCount===1); }catch(e){ return false; } }

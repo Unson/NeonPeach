@@ -78,7 +78,8 @@ function buildMenu(){
     {type: 'separator'}, {role: 'cut'}, {role: 'copy'}, {role: 'paste'}, {role: 'selectAll'}]});
   t.push({label: 'View', submenu: [
     page('Chain', 'chain', 'CmdOrCtrl+1'), page('Presets', 'presets', 'CmdOrCtrl+2'), page('Tone Wizard', 'wizard', 'CmdOrCtrl+3'), page('Scenes', 'scenes', 'CmdOrCtrl+4'), page('Stomp', 'stomp'),
-    page('Tuner', 'tuner', 'CmdOrCtrl+5'), page('Looper', 'looper', 'CmdOrCtrl+6'), page('Beats', 'drums', 'CmdOrCtrl+7'), page('Clone', 'clone', 'CmdOrCtrl+8'), page('Tone Match', 'match', 'CmdOrCtrl+9'),
+    page('Tuner', 'tuner', 'CmdOrCtrl+5'), page('Looper', 'looper', 'CmdOrCtrl+6'), page('Beats', 'drums', 'CmdOrCtrl+7'), page('Clone', 'clone', 'CmdOrCtrl+8'), page('Tone Match', 'match', 'CmdOrCtrl+9'), page('Library', 'library', 'CmdOrCtrl+L'),
+    {type: 'separator'}, page('Song Player', 'practice', 'CmdOrCtrl+P'), page('Record', 'record'),
     {type: 'separator'}, {label: 'Stage Mode', accelerator: 'CmdOrCtrl+Shift+L', click: () => send('stage')},
     {type: 'separator'}, page('Audio Settings', 'io', 'CmdOrCtrl+I'), page('Outputs', 'outs'), page('MIDI', 'midi'), page('Global', 'global'),
     {type: 'separator'}, {role: 'togglefullscreen'}, {role: 'resetZoom'}, {role: 'zoomIn'}, {role: 'zoomOut'}]});
@@ -86,6 +87,8 @@ function buildMenu(){
     {label: 'Tuner', accelerator: 'CmdOrCtrl+T', click: () => send('tuner')},
     {label: 'Mute Everything', accelerator: 'CmdOrCtrl+Shift+M', click: () => send('mute')},
     {label: 'Record the Output', accelerator: 'CmdOrCtrl+R', click: () => send('record')},
+    {label: 'Record a Take (keeps the clean bass)', accelerator: 'CmdOrCtrl+Shift+R', click: () => send('take')},
+    {label: 'Load a Song to Play Along…', accelerator: 'CmdOrCtrl+Alt+O', click: () => send('song')},
     {label: 'Demo Riff', accelerator: 'CmdOrCtrl+D', click: () => send('demo')},
     {label: 'Start or Stop the Beat', accelerator: 'CmdOrCtrl+B', click: () => send('drums')},
     {label: 'Measure the Delay (Ping Test)', click: () => send('ping')},

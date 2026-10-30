@@ -151,12 +151,22 @@ def('amp', { name:'Amp Head', cat:'Amp', color:'#fc6',
 });
 // --- Cab ---
 def('cab', { name:'Cabinet', cat:'Cab', color:'#fc6',
-  params:{ cab:E('Cab',CAB_NAMES,1), mic:E('Mic',['Dynamic','Condenser','Ribbon','DI Blend'],0), dist:P('Distance',0,100,20,'%'), lowcut:P('Low Cut',20,300,40,'Hz'), highcut:P('High Cut',2000,16000,9000,'Hz'), level:P('Level',-24,12,0,'dB') },
+  params:{ cab:E('Cab',CAB_NAMES,1), irid:{l:'IR id', def:'', hidden:true}, mic:E('Mic',['Dynamic','Condenser','Ribbon','DI Blend'],0), dist:P('Distance',0,100,20,'%'), lowcut:P('Low Cut',20,300,40,'Hz'), highcut:P('High Cut',2000,16000,9000,'Hz'), level:P('Level',-24,12,0,'dB') },
   build(ctx,b){ const n=b.n; n.cv=ctx.createConvolver(); n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.mic=ctx.createBiquadFilter(); n.mic.type='peaking'; n.mic.Q.value=1.2; n.prox=ctx.createBiquadFilter(); n.prox.type='lowshelf'; n.prox.frequency.value=150; n.di=ctx.createGain(); n.lvl=ctx.createGain(); n.cur=-1;
     b.wetIn.connect(n.cv).connect(n.hp).connect(n.lp).connect(n.mic).connect(n.prox).connect(n.lvl).connect(b.wetOut); b.wetIn.connect(n.di).connect(n.lvl); },
-  apply(b){ const n=b.n,p=b.p; if(p.cab!==n.cur){ n.cur=p.cab; if(p.cab<CAB_NAMES.length){ n.cv.buffer=genCabIR(NP.ctx,CAB_NAMES[p.cab]); } else { const ir=NP.irs[p.cab-CAB_NAMES.length]; if(ir){ const buf=NP.ctx.createBuffer(1,ir.data.length,NP.ctx.sampleRate); buf.getChannelData(0).set(ir.data); n.cv.buffer=buf; } } }
+  apply(b){ const n=b.n,p=b.p; const key=cabKey(p,'cab','irid'); if(key!==n.cur){ n.cur=key; n.cv.buffer=cabBuffer(p.cab,p.irid); }
     n.hp.frequency.value=p.lowcut; n.lp.frequency.value=p.highcut; const mic=p.mic; n.mic.frequency.value=[3500,8000,1200,3000][mic]; n.mic.gain.value=[3,5,-4,0][mic]; n.prox.gain.value=(1-p.dist/100)*4-1; setP(n.di.gain, mic===3?0.4:0); setP(n.lvl.gain,dB(p.level)); }
 });
+// A cab IR from the Library (kind 'ir'), cut to 1 second and peak-normalized like a loaded cab IR.
+function libIR(id){ return id && typeof NP.clones!=='undefined' ? NP.clones.find(c=>c.id===id && c.kind==='ir') : null; }
+function cabKey(p,ck,ik){ const r=libIR(p[ik]); if(r){ p[ck]=CAB_NAMES.length+NP.irs.length; return 'id:'+r.id; } return 'i:'+p[ck]+':'+(p[ik]?'miss':''); }
+function cabBuffer(cab, irid){ const ctx=NP.ctx, sr=ctx.sampleRate, rec=libIR(irid);
+  if(rec){ if(!rec._cab || rec._cab.sampleRate!==sr){ let x=rec.sr && rec.sr!==sr ? resampleIR(rec.ir, rec.sr, sr) : rec.ir; x=x.subarray(0, Math.min(x.length, sr)); let mx=0; for(let i=0;i<x.length;i++) mx=Math.max(mx,Math.abs(x[i]));
+      const buf=ctx.createBuffer(1,x.length,sr), d=buf.getChannelData(0); d.set(x); if(mx>0) for(let i=0;i<d.length;i++) d[i]/=mx; Object.defineProperty(rec,'_cab',{value:buf,writable:true,enumerable:false,configurable:true}); }
+    return rec._cab; }
+  if(irid || cab>=CAB_NAMES.length+NP.irs.length) cab=Math.min(cab, CAB_NAMES.length-1);   // the IR is not on this device: use a built-in cab
+  if(cab<CAB_NAMES.length) return genCabIR(ctx,CAB_NAMES[cab]);
+  const ir=NP.irs[cab-CAB_NAMES.length]; const buf=ctx.createBuffer(1,ir.data.length,sr); buf.getChannelData(0).set(ir.data); return buf; }
 def('capture', { name:'Peach Capture', cat:'Amp', color:'#fc6',
   params:{ cap:E('Capture',['(none)'],0), input:P('Input',-24,24,0,'dB'), level:P('Level',-24,24,0,'dB'), ir:B('Use IR',1) },
   build(ctx,b){ const n=b.n; n.g=ctx.createGain(); n.sh=shaperNode(ctx); n.cv=ctx.createConvolver(); n.by=ctx.createGain(); n.cvg=ctx.createGain(); n.o=ctx.createGain(); n.cur=-1;
@@ -256,7 +266,7 @@ def('flanger', { name:'Flanger', cat:'Mod', color:'#9cf',
 def('phaser', { name:'Phaser', cat:'Mod', color:'#9cf',
   params:{ rate:P('Rate',0.05,8,0.5,'Hz'), depth:P('Depth',0,100,70,'%'), center:P('Center',100,3000,600,'Hz'), stages:E('Stages',['4','6','8'],0), fb:P('Feedback',0,90,30,'%'), mix:P('Mix',0,100,50,'%') },
   build(ctx,b){ const n=b.n; n.lfo=mkLFO(ctx); n.g=ctx.createGain(); n.ap=[]; let prev=b.wetIn; n.inG=ctx.createGain(); prev=n.inG; b.wetIn.connect(n.inG); for(let i=0;i<8;i++){ const f=ctx.createBiquadFilter(); f.type='allpass'; f.Q.value=0.6; n.ap.push(f); n.g.connect(f.frequency); } n.taps=[ctx.createGain(),ctx.createGain(),ctx.createGain()]; n.fb=ctx.createGain(); n.wet=ctx.createGain(); n.dry=ctx.createGain();
-    n.inG.connect(n.ap[0]); for(let i=1;i<8;i++) n.ap[i-1].connect(n.ap[i]); n.ap[3].connect(n.taps[0]); n.ap[5].connect(n.taps[1]); n.ap[7].connect(n.taps[2]); n.taps.forEach(t=>{ t.connect(n.wet); t.connect(n.fb); }); n.fb.connect(n.inG); n.wet.connect(b.wetOut); b.wetIn.connect(n.dry).connect(b.wetOut); n.lfo.connect(n.g); },
+    n.inG.connect(n.ap[0]); for(let i=1;i<8;i++) n.ap[i-1].connect(n.ap[i]); n.ap[3].connect(n.taps[0]); n.ap[5].connect(n.taps[1]); n.ap[7].connect(n.taps[2]); n.tsum=ctx.createGain(); n.taps.forEach(t=>t.connect(n.tsum)); n.tsum.connect(n.wet); n.tsum.connect(n.fb); n.fbd=ctx.createDelay(0.05); n.fbd.delayTime.value=0; n.fb.connect(n.fbd).connect(n.inG);   /* one node feeds both the output and the loop, so the loop's one-block delay always lands on the feedback side, in every engine */ n.wet.connect(b.wetOut); b.wetIn.connect(n.dry).connect(b.wetOut); n.lfo.connect(n.g); },
   apply(b){ const n=b.n,p=b.p; n.lfo.frequency.value=p.rate; n.ap.forEach((f,i)=>f.frequency.value=p.center*(1+i*0.15)); n.g.gain.value=p.center*p.depth/100*0.9; const s=p.stages; n.taps.forEach((t,i)=>t.gain.value=i===s?1:0); setP(n.fb.gain,p.fb/100*0.7); const m=p.mix/100; setP(n.wet.gain,m); setP(n.dry.gain,1-m*0.5); }
 });
 def('trem', { name:'Tremolo', cat:'Mod', color:'#9cf',
@@ -365,9 +375,7 @@ function buildRig(){ const ctx=NP.ctx, r=NP.rig={};
   r.inMono=ctx.createGain(); r.inMono.channelCount=1; r.inMono.channelCountMode='explicit'; r.inMono.channelInterpretation='speakers';
   r.inPre.connect(r.inSplit); r.inSplit.connect(r.inSelL,0); r.inSplit.connect(r.inSelR,1); r.inSelL.connect(r.inMono); r.inSelR.connect(r.inMono);
   r.inGain=ctx.createGain(); r.inMono.connect(r.inGain); r.inAn=ctx.createAnalyser(); r.inAn.fftSize=4096; r.inGain.connect(r.inAn);
-  r.xoLP=ctx.createBiquadFilter(); r.xoLP.type='lowpass'; r.xoLP.Q.value=0.5; r.xoHP=ctx.createBiquadFilter(); r.xoHP.type='highpass'; r.xoHP.Q.value=0.5;
-  r.aIn=ctx.createGain(); r.bIn=ctx.createGain(); r.aOut=ctx.createGain(); r.bOut=ctx.createGain(); r.aLvl=ctx.createGain(); r.bLvl=ctx.createGain(); r.bPan=ctx.createStereoPanner(); r.bPol=ctx.createGain(); r.sum=ctx.createGain();
-  r.aLvl.connect(r.sum); r.bLvl.connect(r.bPan).connect(r.bPol).connect(r.sum);
+  r.sum=ctx.createGain(); makeSection();
   r.geq=[]; let prev=r.sum; const gf=[60,180,500,1200,3000,8000]; gf.forEach((f,i)=>{ const q=ctx.createBiquadFilter(); q.type=i===0?'lowshelf':(i===5?'highshelf':'peaking'); q.frequency.value=f; q.Q.value=1; r.geq.push(q); prev.connect(q); prev=q; });
   r.master=ctx.createGain(); r.outAn=ctx.createAnalyser(); r.outAn.fftSize=2048; r.lim=new AudioWorkletNode(ctx,'np-limit',{outputChannelCount:[2]}); r.lim.parameters.get('ceiling').value=-1; r.lim.parameters.get('release').value=80; r.lim.parameters.get('input').value=1.1;   /* the old built-in limiter added about 1 dB of make-up; keep the same loudness */ r.lim.port.onmessage=e=>{ NP.meters.lim=e.data.gr; }; r.outGain=ctx.createGain();
   prev.connect(r.master).connect(r.lim).connect(r.outGain).connect(r.outAn);
@@ -384,9 +392,37 @@ function buildRig(){ const ctx=NP.ctx, r=NP.rig={};
   r.backing=ctx.createGain(); r.backing.connect(r.master);
   r.demo=ctx.createGain(); r.demo.connect(r.inGain);
   r.inGain.connect(r.auxDry);
-  r.aDel=ctx.createDelay(0.1); r.bDel=ctx.createDelay(0.1); r.aDel.delayTime.value=0; r.bDel.delayTime.value=0;
+  r.recDI=new AudioWorkletNode(ctx,'np-recorder'); r.inGain.connect(r.recDI);   // the clean bass, for re-amping later
   routeOutputs();
 }
+// A section is the part of the rig a preset owns: the split, both paths and their levels.
+// Changing presets builds a new section and lets the old one ring out, so delay and reverb tails carry over with no gap.
+const SEC_KEYS=['feed','xoLP','xoHP','aIn','bIn','aOut','bOut','aLvl','bLvl','bPan','bPol','aDel','bDel'];
+function makeSection(){ const ctx=NP.ctx, r=NP.rig;
+  r.feed=ctx.createGain(); r.inGain.connect(r.feed);
+  r.xoLP=ctx.createBiquadFilter(); r.xoLP.type='lowpass'; r.xoLP.Q.value=0.5; r.xoHP=ctx.createBiquadFilter(); r.xoHP.type='highpass'; r.xoHP.Q.value=0.5;
+  r.aIn=ctx.createGain(); r.bIn=ctx.createGain(); r.aOut=ctx.createGain(); r.bOut=ctx.createGain(); r.aLvl=ctx.createGain(); r.bLvl=ctx.createGain(); r.bPan=ctx.createStereoPanner(); r.bPol=ctx.createGain();
+  r.aLvl.connect(r.sum); r.bLvl.connect(r.bPan).connect(r.bPol).connect(r.sum);
+  r.aDel=ctx.createDelay(0.1); r.bDel=ctx.createDelay(0.1); r.aDel.delayTime.value=0; r.bDel.delayTime.value=0; }
+// How long a block keeps sounding after its input stops, in seconds.
+function blockTail(b){ if(b.bypass && !(b.trailsWet && b.p.trails===1)) return 0; const p=b.p;
+  switch(b.type){
+    case 'delay': case 'mdelay': { const t=(p.sync?60/NP.bpm:(p.time||400)/1000), fb=Math.max(0.01,Math.min(0.97,(p.fb||0)/100)); return Math.min(10, t*(1+Math.log(0.001)/Math.log(fb))); }
+    case 'reverb': return Math.min(12, (p.decay||2)*1.4+(p.predelay||0)/1000+(p.type===5?3:0));
+    case 'revdelay': case 'freeze': case 'stutter': case 'swell': case 'mbdrive': return 3;
+    default: return 0; } }
+function sectionTail(A,B){ return Math.max(0.25, ...A.map(blockTail), ...B.map(blockTail)); }
+NP.retired=[];
+function killSection(sec, fade){ const r=NP.rig; setP(sec.aLvl.gain,0,fade/4); setP(sec.bLvl.gain,0,fade/4); clearTimeout(sec.timer);
+  sec.timer=setTimeout(()=>{ NP.retired=NP.retired.filter(x=>x!==sec); [...sec.A,...sec.B].forEach(destroyBlock); try{ r.inGain.disconnect(sec.feed); }catch(e){} SEC_KEYS.forEach(k=>{ try{ sec[k].disconnect(); }catch(e){} }); }, fade*1000+40); }
+function retireSection(keep){ const r=NP.rig, sec={}; SEC_KEYS.forEach(k=>sec[k]=r[k]);
+  sec.A=NP.paths.A.filter(b=>b!==keep); sec.B=NP.paths.B.filter(b=>b!==keep);
+  if(keep){ try{ keep.output.disconnect(); }catch(e){} }
+  setP(sec.feed.gain,0,0.004);   // stop feeding it; what is already inside rings out
+  const trails=(NP.globals||{}).trailsGlobal!==0, tail=trails?sectionTail(sec.A,sec.B):0.05;
+  NP.retired.forEach(x=>killSection(x,0.03));   // only one old sound rings at a time, so switching fast never piles up
+  NP.retired.push(sec); killSection(sec, tail);
+  makeSection(); }
 // The interface decides how many outputs there are. Main and Aux each take a pair.
 function outChannels(){ const d=NP.ctx.destination; return Math.max(2, Math.min(8, d.maxChannelCount||2)); }
 function routeOutputs(force){ const r=NP.rig, ctx=NP.ctx, d=ctx.destination, g=NP.globals||{}, N=outChannels();
@@ -406,22 +442,22 @@ function chainLatency(){ const s=NP.preset.split, a=pathLat('A'), b=pathLat('B')
 function alignPaths(){ const r=NP.rig, s=NP.preset.split, sr=NP.ctx.sampleRate; let da=0, db=0; if(s.mode===0||s.mode===1){ const a=pathLat('A'), b=pathLat('B'); if(a>b) db=a-b; else da=b-a; }
   setP(r.aDel.delayTime, da/sr, 0.005); setP(r.bDel.delayTime, db/sr, 0.005); }
 function rewire(){ const r=NP.rig, s=NP.preset.split; const ctx=NP.ctx;
-  r.inGain.disconnect(); r.inGain.connect(r.inAn); r.inGain.connect(r.inMeter); r.xoLP.disconnect(); r.xoHP.disconnect(); r.aIn.disconnect(); r.bIn.disconnect(); r.aOut.disconnect(); r.bOut.disconnect();
+  r.feed.disconnect(); r.xoLP.disconnect(); r.xoHP.disconnect(); r.aIn.disconnect(); r.bIn.disconnect(); r.aOut.disconnect(); r.bOut.disconnect();
   r.aDel.disconnect(); r.bDel.disconnect(); r.aOut.connect(r.aDel).connect(r.aLvl); r.bOut.connect(r.bDel).connect(r.bLvl);
   const mode=s.mode; // 0 parallel, 1 crossover, 2 series, 3 A only
-  if(mode===1){ r.inGain.connect(r.xoLP).connect(r.aIn); r.inGain.connect(r.xoHP).connect(r.bIn); r.xoLP.frequency.value=s.xo; r.xoHP.frequency.value=s.xo; }
-  else if(mode===2){ r.inGain.connect(r.aIn); r.aOut.disconnect(); r.aOut.connect(r.bIn); }
-  else if(mode===3){ r.inGain.connect(r.aIn); }
-  else { r.inGain.connect(r.aIn); r.inGain.connect(r.bIn); }
+  if(mode===1){ r.feed.connect(r.xoLP).connect(r.aIn); r.feed.connect(r.xoHP).connect(r.bIn); r.xoLP.frequency.value=s.xo; r.xoHP.frequency.value=s.xo; }
+  else if(mode===2){ r.feed.connect(r.aIn); r.aOut.disconnect(); r.aOut.connect(r.bIn); }
+  else if(mode===3){ r.feed.connect(r.aIn); }
+  else { r.feed.connect(r.aIn); r.feed.connect(r.bIn); }
   const chain=(inp,list,out)=>{ let prev=inp; list.forEach(b=>{ b.output.disconnect(); prev.connect(b.input); prev=b.output; }); prev.connect(out); };
   chain(r.aIn, NP.paths.A, r.aOut); chain(r.bIn, NP.paths.B, r.bOut);
-  setP(r.aLvl.gain, dB(s.aLvl)); setP(r.bLvl.gain, mode===3?0:dB(s.bLvl)); r.bPan.pan.value=s.bPan/100; setP(r.bPol.gain, s.bPol?-1:1);
+  const pl=dB(NP.preset.level||0); setP(r.aLvl.gain, dB(s.aLvl)*pl); setP(r.bLvl.gain, mode===3?0:dB(s.bLvl)*pl); r.bPan.pan.value=s.bPan/100; setP(r.bPol.gain, s.bPol?-1:1);
   alignPaths(); if(typeof onRigChanged==='function') onRigChanged();
 }
 function applyGlobals(){ const rk=NP.rig.routeKey+':'+(NP.globals.inCh|0); routeOutputs(); if(NP.lastLoopKey!==rk){ NP.lastLoopKey=rk; if(NP.preset) [...NP.paths.A,...NP.paths.B].filter(b=>b.type==='fxloop').forEach(b=>BLOCKS.fxloop.apply(b)); } const g=NP.globals, r=NP.rig, cg=NP.cloneGuard|0, ch=g.inCh|0, now=NP.ctx.currentTime; r.geq.forEach((q,i)=>q.gain.value=g.geq[i]);
   if(NP.guardWas && !cg) NP.guardOff=now;   // the Clone guard just let go: fade the chain back in over about a second
   setP(r.master.gain, cg?0:dB(g.master), !cg && NP.guardOff!=null && now-NP.guardOff<1.2 ? 0.4 : 0.02); NP.guardWas=cg;
-  const inTrim=dB(g.inGain)*(g.pad?0.5:1); setP(r.inGain.gain,inTrim); setP(r.inSelL.gain, ch===0?1:ch===2?0.5:0); setP(r.inSelR.gain, ch===1?1:ch===2?0.5:0);
+  const inTrim=dB(g.inGain)*(g.pad?0.5:1); setP(r.inGain.gain,inTrim); const live=NP.reamp?0:1; setP(r.inSelL.gain, live*(ch===0?1:ch===2?0.5:0)); setP(r.inSelR.gain, live*(ch===1?1:ch===2?0.5:0));   /* re-amping plays a take in place of your bass */
   setP(r.outGain.gain, cg===2?1:(g.mute||NP.tunerMute)?0:1);
   if(typeof UI!=='undefined' && UI.clSrcG) setP(UI.clSrcG.gain, 0.9*dB(Math.min(0,g.master)));   // the Clone A/B preview follows the master
   if(NP.lastInTrim!==inTrim){ NP.lastInTrim=inTrim; if(typeof refreshCloneBlocks==='function') refreshCloneBlocks(); } }   // pedal clones undo the input gain
@@ -429,13 +465,21 @@ function applyGlobals(){ const rk=NP.rig.routeKey+':'+(NP.globals.inCh|0); route
 // ---------- Preset model ----------
 function blankPreset(name='Init'){ return { name, bpm:120, split:{mode:0,xo:200,aLvl:0,bLvl:-100,bPan:0,bPol:0}, A:[], B:[], scenes:Array.from({length:8},(_,i)=>({name:'Scene '+(i+1), data:null})), stomps:{A:[],B:[],C:[]}, exp:{target:null,min:0,max:100} }; }
 function serializeBlock(b){ return {type:b.type, bypass:b.bypass, p:{...b.p}, ir:b.customIRName||null}; }
-function serializePreset(){ const p=NP.preset; return { name:p.name, bpm:NP.bpm, split:{...p.split}, A:NP.paths.A.map(serializeBlock), B:NP.paths.B.map(serializeBlock), scenes:p.scenes.map(s=>({name:s.name,data:s.data?JSON.parse(JSON.stringify(s.data)):null})), stomps:JSON.parse(JSON.stringify(p.stomps)), exp:{...p.exp} }; }
-function loadPreset(data){ const d=data?JSON.parse(JSON.stringify(data)):blankPreset();
-  ['A','B'].forEach(k=>{ NP.paths[k].forEach(destroyBlock); NP.paths[k]=[]; });
-  NP.preset={ name:d.name||'Init', split:Object.assign({mode:0,xo:200,aLvl:0,bLvl:-100,bPan:0,bPol:0},d.split||{}), scenes:(d.scenes&&d.scenes.length===8)?d.scenes:blankPreset().scenes, stomps:Object.assign({A:[],B:[],C:[]},d.stomps||{}), exp:Object.assign({target:null,min:0,max:100},d.exp||{}) };
+function serializePreset(){ const p=NP.preset; return { name:p.name, bpm:NP.bpm, level:p.level||0, split:{...p.split}, A:NP.paths.A.map(serializeBlock), B:NP.paths.B.map(serializeBlock), scenes:p.scenes.map(s=>({name:s.name,data:s.data?JSON.parse(JSON.stringify(s.data)):null})), stomps:JSON.parse(JSON.stringify(p.stomps)), exp:{...p.exp} }; }
+function loadPreset(data, gapless){ const d=data?JSON.parse(JSON.stringify(data)):blankPreset();
+  // a loop you recorded follows you to the next preset
+  const oldLoop=[...NP.paths.A,...NP.paths.B].find(b=>b.type==='looper' && b.loopState && b.loopState.state!=='empty');
+  const smooth=gapless!==false && NP.preset && NP.rig && NP.rig.feed;
+  if(smooth){ retireSection(oldLoop); NP.paths.A=[]; NP.paths.B=[]; }
+  else ['A','B'].forEach(k=>{ NP.paths[k].forEach(b=>{ if(b!==oldLoop) destroyBlock(b); }); NP.paths[k]=[]; });
+  NP.preset={ name:d.name||'Init', level:+d.level||0, split:Object.assign({mode:0,xo:200,aLvl:0,bLvl:-100,bPan:0,bPol:0},d.split||{}), scenes:(d.scenes&&d.scenes.length===8)?d.scenes:blankPreset().scenes, stomps:Object.assign({A:[],B:[],C:[]},d.stomps||{}), exp:Object.assign({target:null,min:0,max:100},d.exp||{}) };
   if(NP.preset.exp.target && !NP.preset.exp.target.ref) NP.preset.exp.target=null;
   NP.bpm=d.bpm||120;
-  ['A','B'].forEach(k=>{ (d[k]||[]).forEach(bd=>{ if(BLOCKS[bd.type]) NP.paths[k].push(createBlock(bd.type,bd.p,bd.bypass)); }); });
+  let kept=false;
+  ['A','B'].forEach(k=>{ (d[k]||[]).forEach(bd=>{ if(!BLOCKS[bd.type]) return;
+    if(oldLoop && !kept && bd.type==='looper'){ kept=true; Object.assign(oldLoop.p,bd.p); applyBlock(oldLoop); setBypass(oldLoop,!!bd.bypass,true); NP.paths[k].push(oldLoop); return; }
+    NP.paths[k].push(createBlock(bd.type,bd.p,bd.bypass)); }); });
+  if(oldLoop && !kept){ if(totalBlocks()<MAX_BLOCKS) NP.paths.A.push(oldLoop); else destroyBlock(oldLoop); }
   NP.selected=null; rewire(); NP.scene=-1; }
 function captureScene(){ return { bypass:{A:NP.paths.A.map(b=>b.bypass),B:NP.paths.B.map(b=>b.bypass)}, params:{A:NP.paths.A.map(b=>({...b.p})),B:NP.paths.B.map(b=>({...b.p}))}, split:{...NP.preset.split} }; }
 function recallScene(i){ const s=NP.preset.scenes[i]; if(!s||!s.data) return false; const d=s.data; ['A','B'].forEach(k=>{ NP.paths[k].forEach((b,j)=>{ if(d.params[k][j]){ Object.assign(b.p,d.params[k][j]); applyBlock(b); } if(d.bypass[k][j]!=null) setBypass(b,d.bypass[k][j]); }); }); if(d.split){ Object.assign(NP.preset.split,d.split); rewire(); } NP.scene=i; return true; }

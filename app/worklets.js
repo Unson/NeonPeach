@@ -250,21 +250,24 @@ class LooperProcessor extends AudioWorkletProcessor {
     // 3 minutes of stereo is ~70 MB, so the buffer is made only when recording starts
     this.max=Math.floor(sampleRate*180); this.buf=null; this.dead=false;
     this.undo=null; this.len=0; this.pos=0; this.state='empty'; this.reverse=false; this.half=false; this.tick=0; this.fpos=0;
+    this.bar=0; this.target=0; this.after='play'; this.armAt=0;   // bar: loop length snaps to whole bars; armAt: recording waits for this frame
     this.port.onmessage=(e)=>this.cmd(e.data);
   }
   cmd(m){
     const s=this.state;
+    if(m.bar!==undefined) this.bar=Math.max(0, Math.floor(m.bar||0));
     switch(m.cmd){
       case 'kill': this.dead=true; this.buf=null; this.undo=null; return;
       case 'rec':
-        if(s==='empty'){ if(!this.buf) this.buf=[new Float32Array(this.max), new Float32Array(this.max)]; this.state='rec'; this.len=0; this.pos=0; }
-        else if(s==='rec'){ this.len=this.pos; this.pos=0; this.state='play'; }
+        if(s==='empty' || s==='arm'){ if(!this.buf) this.buf=[new Float32Array(this.max), new Float32Array(this.max)]; this.len=0; this.pos=0; this.target=0;
+          if(s==='empty' && m.at>currentFrame){ this.state='arm'; this.armAt=m.at; } else this.state='rec'; }
+        else if(s==='rec'){ this.endRec('play'); }
         else if(s==='play'){ this.snap(); this.state='over'; }
         else if(s==='over'){ this.state='play'; }
         else if(s==='stop'){ this.snap(); this.pos=0; this.fpos=0; this.state='over'; }
         break;
-      case 'play': if(s==='rec'){ this.len=this.pos; this.pos=0; this.state='play'; } else if(this.len>0){ if(s==='over') this.state='play'; else if(s==='stop'){ this.pos=0; this.fpos=0; this.state='play'; } } break;
-      case 'stop': if(s==='rec'){ this.len=this.pos; this.state='stop'; } else if(this.len>0) this.state='stop'; break;
+      case 'play': if(s==='rec'){ this.endRec('play'); } else if(s==='arm'){ this.state='empty'; } else if(this.len>0){ if(s==='over') this.state='play'; else if(s==='stop'){ this.pos=0; this.fpos=0; this.state='play'; } } break;
+      case 'stop': if(s==='rec'){ this.endRec('stop'); } else if(s==='arm'){ this.state='empty'; } else if(this.len>0) this.state='stop'; break;
       case 'clear': this.state='empty'; this.len=0; this.pos=0; this.fpos=0; this.undo=null; this.buf=null; break;
       case 'undo': if(this.undo){ this.buf[0].set(this.undo[0].subarray(0,this.len)); this.buf[1].set(this.undo[1].subarray(0,this.len)); this.undo=null; } break;
       case 'reverse': this.reverse=!this.reverse; break;
@@ -272,8 +275,15 @@ class LooperProcessor extends AudioWorkletProcessor {
     }
     this.report();
   }
+  // Stop the first recording. With bars on, the loop length snaps to the nearest whole number of bars:
+  // stop a little late and the extra is trimmed, stop early and it keeps recording to the bar line.
+  endRec(next){ const pos=this.pos, bar=this.bar;
+    if(bar>0 && pos>0){ const t=Math.min(Math.floor(this.max/bar)*bar || bar, Math.max(bar, Math.round(pos/bar)*bar));
+      if(t>pos){ this.target=t; this.after=next; return; }
+      this.len=t; this.pos=next==='stop'?0:pos-t; this.fpos=this.pos; this.state=next; return; }
+    this.len=pos; this.pos=0; this.fpos=0; this.state=next; }
   snap(){ this.undo=[this.buf[0].slice(0,this.len), this.buf[1].slice(0,this.len)]; }
-  report(){ this.port.postMessage({state:this.state, len:this.len, pos:this.pos, sr:sampleRate, reverse:this.reverse, half:this.half, hasUndo:!!this.undo}); }
+  report(){ this.port.postMessage({state:this.state, len:this.len, pos:this.pos, sr:sampleRate, reverse:this.reverse, half:this.half, hasUndo:!!this.undo, target:this.target, bar:this.bar}); }
   process(inputs, outputs, p){
     if(this.dead) return false;
     const inp=inputs[0], out=outputs[0]; if(!out||!out.length) return true;
@@ -282,9 +292,10 @@ class LooperProcessor extends AudioWorkletProcessor {
     for(let i=0;i<n;i++){
       const xL = hasIn?inp[0][i]:0, xR = hasIn?(inp[1]||inp[0])[i]:0;
       let lL=0,lR=0;
+      if(this.state==='arm' && currentFrame+i>=this.armAt){ this.state='rec'; this.tick=1e9; }
       if(this.state==='rec'){
-        if(this.pos<this.max){ this.buf[0][this.pos]=xL; this.buf[1][this.pos]=xR; this.pos++; }
-        else { this.len=this.pos; this.pos=0; this.state='play'; }
+        if(this.pos<this.max){ this.buf[0][this.pos]=xL; this.buf[1][this.pos]=xR; this.pos++; if(this.target && this.pos>=this.target){ this.len=this.target; this.target=0; this.pos=0; this.fpos=0; this.state=this.after; this.tick=1e9; } }
+        else { this.len=this.pos; this.pos=0; this.fpos=0; this.target=0; this.state='play'; }
       } else if(this.state==='play' || this.state==='over'){
         if(this.len>0){
           let rp;
@@ -312,7 +323,7 @@ class RecorderProcessor extends AudioWorkletProcessor {
     else if(m.cmd==='stop'){ this.on=false; const L=this.join(0), R=this.join(1); this.port.postMessage({done:true, L, R, sr:sampleRate},[L.buffer,R.buffer]); }
   }; }
   join(c){ let len=0; for(const k of this.chunks[c]) len+=k.length; const o=new Float32Array(len); let p=0; for(const k of this.chunks[c]){ o.set(k,p); p+=k.length; } return o; }
-  process(inputs){ if(this.dead) return false; const inp=inputs[0]; if(this.on && inp && inp.length){ this.chunks[0].push(inp[0].slice()); this.chunks[1].push((inp[1]||inp[0]).slice()); } return true; }
+  process(inputs){ if(this.dead) return false; const inp=inputs[0]; if(this.on){ if(inp && inp.length){ this.chunks[0].push(inp[0].slice()); this.chunks[1].push((inp[1]||inp[0]).slice()); } else { const z=new Float32Array(128); this.chunks[0].push(z); this.chunks[1].push(z); } } return true; }
 }
 
 // ---------- Simple peak/RMS meter ----------
