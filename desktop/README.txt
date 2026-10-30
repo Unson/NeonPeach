@@ -37,6 +37,20 @@ NEW IN 2.3: THE NEON 900 HEAD
   at high gain. It adds 0.4 ms, the same as any drive block.
 - It plays the same in the low-delay engine and in the browser engine.
 
+MELTED RASPBERRY (also new in 2.3)
+- The 900's bigger sibling. Same knobs, plus:
+- The lows stay clean. Everything under Split goes around the drive.
+  Low Squeeze is a compressor just for the lows. Lows sets their level.
+  The lows come back in time with the highs, so nothing thins out.
+- Two drive stages. Warmth is a soft first stage. It adds a little
+  squash and even harmonics before the drive. That is the melted part.
+- A third circuit, Raspberry. Mod goes from Melt (creamy and round) to
+  Jam (crunchy and mid-forward). Microtubes and Alpha-Omega are there too.
+- Presence after the drive. A 6-band EQ at 70, 180, 400, 1k, 2.5k and
+  6k. Air adds sparkle up top.
+- It adds 0.8 ms (two drive stages). Two presets are in bank 6, and the
+  Wizard has a Melted Raspberry style.
+
 NEW IN 2.2: THE BEDROOM KIT
 - Songs (Practice > Songs): load any song. Drag across the waveform to
   loop a hard part. Slow it down without changing the pitch. Change its
@@ -153,9 +167,9 @@ WHERE THINGS ARE
 
 WHAT IT DOES
 - 2 signal paths. Parallel, crossover, series, or A only.
-- Up to 24 blocks. 56 block types.
+- Up to 24 blocks. 57 block types.
 - Drives: B3K, Vintage, Alpha, Omega, Ignissor fuzz, overdrive, tube pre, wavefolder.
-- The Neon 900 head (Darkglass-style), 8 classic amp heads, 8 cabs, 4 mic types, load your own .wav IRs.
+- The Neon 900 and Melted Raspberry heads (Darkglass-style), 8 classic amp heads, 8 cabs, 4 mic types, load your own .wav IRs.
 - Clone: copy any pedal or plugin. Load .nam files and .wav IRs. (See CLONE below.)
 - Tone Match: match a record you love with a 10-band EQ.
 - Compressor, gate, limiter. Parametric, graphic, 6-band EQ, cuts.
