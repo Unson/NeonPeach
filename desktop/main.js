@@ -139,17 +139,24 @@ ipcMain.on('np:ready', () => { rendererReady = true; flushFiles(); });
 
 // ---------- the native audio engine (C++): ASIO / Core Audio / WASAPI, no browser audio in the way ----------
 let NAT = null, natEng = null, natTimer = null, natLast = 0, natErr = '';
+// crash guard: mark before touching the engine, clear after. If the app died in between, the next start leaves it off.
+if(SETTINGS.natPending){ SETTINGS.natPending = false; SETTINGS.nativeOff = true; writeSettings(SETTINGS); }
+function natMark(on){ SETTINGS.natPending = !!on; writeSettings(SETTINGS); }
 function natLib(){
   if(NAT || natErr) return NAT;
-  const dir = app.isPackaged ? path.join(process.resourcesPath, 'native') : path.join(__dirname, 'native');
+  const dir = path.join(__dirname, 'native').replace('app.asar' + path.sep, 'app.asar.unpacked' + path.sep);   // native files sit outside the archive
   const f = path.join(dir, process.platform + '-' + process.arch, 'npaudio.node');
   try{ NAT = require(f); }catch(e){ natErr = String(e && e.message || e); }
   return NAT; }
-ipcMain.handle('np:nat-info', () => { const L = natLib(); if(!L) return {available: false, error: natErr};
-  let devices = []; try{ devices = L.devices(); }catch(e){} return {available: true, devices, platform: process.platform}; });
+ipcMain.handle('np:nat-info', () => {
+  if(SETTINGS.nativeOff) return {available: false, crashed: true, error: 'it closed the app last time, so it is switched off'};
+  natMark(true); const L = natLib(); if(!L){ natMark(false); return {available: false, error: natErr}; }
+  let devices = []; try{ devices = L.devices(); }catch(e){} natMark(false); return {available: true, devices, platform: process.platform}; });
+ipcMain.handle('np:nat-reset', () => { SETTINGS.nativeOff = false; SETTINGS.natPending = false; writeSettings(SETTINGS); return true; });
 ipcMain.handle('np:nat-open', (_e, cfg) => { const L = natLib(); if(!L) return {ok: false, error: natErr || 'The native engine is not here.'};
+  if(SETTINGS.nativeOff) return {ok: false, error: 'switched off after a crash'};
   try{ if(!natEng) natEng = new L.Engine({sampleRate: (cfg && cfg.rate) || 48000, outChannels: 2});
-    const r = natEng.open(cfg || {}); startNatPoll(); return r; }catch(e){ return {ok: false, error: String(e && e.message || e)}; } });
+    natMark(true); const r = natEng.open(cfg || {}); natMark(false); startNatPoll(); return r; }catch(e){ natMark(false); return {ok: false, error: String(e && e.message || e)}; } });
 ipcMain.on('np:nat-cmd', (_e, ops) => { if(natEng) try{ natEng.cmd(ops); }catch(e){ console.error(e); } });
 ipcMain.handle('np:nat-close', () => { if(natEng) try{ natEng.close(); }catch(e){} return true; });
 function startNatPoll(){ if(natTimer) return; natTimer = setInterval(() => { if(!natEng || !win || win.isDestroyed()) return; let pk; try{ pk = natEng.poll(); }catch(e){ return; }

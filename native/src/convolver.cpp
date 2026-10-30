@@ -49,10 +49,11 @@ struct Stage {
 };
 
 struct Path {
-  std::vector<float> head; int H = 0; std::vector<float> hist; int hp = 0;      // direct taps
+  static const int HL = 512;
+  std::vector<float> head; int H = 0; std::vector<float> hist; int hp = 0;      // direct taps (stored reversed; history kept twice so reads are one straight run)
   std::vector<std::unique_ptr<Stage>> st; std::vector<float> ring; int mask = 0; int64_t base = 0; int64_t t = 0;
   void setup(const std::vector<float>& h){
-    const int len = (int)h.size(); H = std::min(256, len); head.assign(h.begin(), h.begin() + H); hist.assign(512, 0.f); hp = 0;
+    const int len = (int)h.size(); H = std::min(256, len); head.assign(H, 0.f); for(int k = 0; k < H; k++) head[k] = h[H - 1 - k]; hist.assign(2*HL, 0.f); hp = 0;
     st.clear(); if(len > 256) st.emplace_back(new Stage(128, 256, h.data(), std::min(len, 2048)));
     if(len > 2048) st.emplace_back(new Stage(1024, 2048, h.data(), std::min(len, 16384)));
     if(len > 16384) st.emplace_back(new Stage(8192, 16384, h.data(), len));
@@ -60,7 +61,9 @@ struct Path {
   void run(const float* x, float* y, int n){
     for(int i = 0; i < n; i++){
       float xi = x ? x[i] : 0.f;
-      hist[hp] = xi; double acc = 0; const int HM = 511; for(int k = 0; k < H; k++) acc += head[k]*hist[(hp - k) & HM]; hp = (hp + 1) & HM;
+      hist[hp] = xi; hist[hp + HL] = xi; const float* xs = hist.data() + hp + HL - H + 1; const float* hd = head.data();
+      float a0 = 0, a1 = 0, a2 = 0, a3 = 0; int k = 0; for(; k + 4 <= H; k += 4){ a0 += hd[k]*xs[k]; a1 += hd[k+1]*xs[k+1]; a2 += hd[k+2]*xs[k+2]; a3 += hd[k+3]*xs[k+3]; } for(; k < H; k++) a0 += hd[k]*xs[k];
+      double acc = (a0 + a1) + (a2 + a3); hp = (hp + 1) & (HL - 1);
       for(auto& s : st){ s->cur[s->fill++] = xi; if(s->fill == s->P){ s->fill = 0; s->blockDone(t + 1 - s->P, ring, base, mask); } }
       y[i] = (float)(acc + ring[t & mask]); ring[t & mask] = 0.f; t++; }
     for(auto& s : st) s->step(n, ring, base, mask); }

@@ -14,7 +14,24 @@ HOW TO RUN
 No bass handy? Press "Hear it" on the Wizard page, or open Settings > Audio
 and press "Play the demo riff".
 
-NEW IN 2.0
+NEW IN 2.1: THE LOW-DELAY ENGINE
+- Neon Peach now has its own audio engine, written in C++. It talks to
+  your audio interface directly: through ASIO on Windows, and Core Audio
+  on Mac. The browser's audio system is out of the way.
+- It plays the exact same sound. Every effect was checked against the old
+  engine, sample by sample.
+- Open Settings > Audio. The "Low-delay engine" panel picks the driver,
+  the interface, the input jacks, the buffer size and the sample rate.
+  Smaller buffer = less delay. If you hear clicks, go one size up.
+- Windows: pick "ASIO" as the driver for the lowest delay. If your
+  interface has no ASIO choice, install the ASIO driver from the company
+  that made it (Focusrite, Audient, Behringer, PreSonus and others give it
+  away free on their websites).
+- No microphone prompt any more. The interface's jacks come straight in.
+- If the engine can't open your interface, Neon Peach falls back to the
+  old engine and tells you why. "Use the browser engine instead" on the
+  same panel switches back by hand.
+
 - Much less delay. The old compressors, limiter and drives hid 20 to 28 ms
   of delay inside the chain. The new ones add almost none:
   0 ms for compressors and limiters, 0.4 ms per drive or amp.
@@ -22,7 +39,7 @@ NEW IN 2.0
 - The clock in the top bar shows the delay from string to speaker.
   Tap it for details. Settings > Audio has a ping test that measures the
   real number through your interface.
-- Windows: Audio > Exclusive Windows Audio. Neon Peach takes over the
+- Windows (browser engine only): Audio > Exclusive Windows Audio. Neon Peach takes over the
   output so the Windows mixer can't add its own buffer. Other apps go
   quiet while it runs. The app restarts to switch. If you get no sound,
   turn it off in the same menu.

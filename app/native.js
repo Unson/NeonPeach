@@ -18,7 +18,7 @@ async function natStart(){
   if(!window.npNative || !window.makeNativeAudio) return false;
   const p = natPrefs(); if(!p.enabled) return false;
   try{
-    NAT.info = await npNative.info(); if(!NAT.info.available){ console.warn('native engine:', NAT.info.error); return false; }
+    NAT.info = await npNative.info(); if(!NAT.info.available){ console.warn('native engine:', NAT.info.error); if(NAT.info.crashed) NAT.err = NAT.info.error; return false; }
     let cfg;
     if(p.api === 'null') cfg = {api: 'null', rate: p.rate, buffer: p.buffer, fakeInput: !!p.fakeInput};
     else { const pk = natPick(NAT.info.devices, p); if(!pk.out) return false; cfg = {api: pk.api, out: pk.out.id, in: pk.inp ? pk.inp.id : pk.out.id, firstIn: p.firstIn|0, rate: p.rate, buffer: p.buffer}; NAT.pick = pk; }
@@ -64,11 +64,11 @@ function nativeDeviceSection(){
   <div class="field wide"><label for="natrate">Sample rate</label><select id="natrate">${[44100, 48000, 88200, 96000].map(x => `<option value="${x}" ${p.rate === x ? 'selected' : ''}>${trimNum((x/1000).toFixed(1))} kHz${x === 48000 ? ' (best for clones)' : ''}</option>`).join('')}</select></div></div>
   <div class="row wrap" style="margin-top:12px"><button class="primary" id="natapply">${icon('refresh')}Apply</button><button class="sm" id="devrefresh">${icon('refresh')}Refresh list</button><button class="sm" id="natoff">Use the browser engine instead</button></div>
   <p class="dim" style="margin-top:10px">Smaller buffers mean less delay. If you hear clicks, go one size up. ${asio ? '' : 'For the lowest delay on Windows, install your interface\'s ASIO driver from its maker.'}</p></section>`; }
-function nativeOffer(){ if(!window.npNative) return ''; const p = natPrefs(); return p.enabled ? `<p class="dim" style="margin-top:10px">${esc(NAT.err ? 'The low-delay engine could not start: ' + NAT.err : 'The low-delay engine is not running.')}</p>` : `<div class="row wrap" style="margin-top:10px"><button class="sm primary" id="naton">${icon('bolt')}Use the low-delay engine</button></div>`; }
+function nativeOffer(){ if(!window.npNative) return ''; const p = natPrefs(); return p.enabled && !(NAT.info && NAT.info.crashed) ? `<p class="dim" style="margin-top:10px">${esc(NAT.err ? 'The low-delay engine could not start: ' + NAT.err : 'The low-delay engine is not running.')}</p>` : `${NAT.info && NAT.info.crashed ? '<p class="dim" style="margin-top:10px">The low-delay engine closed the app last time, so it is off. Try it again:</p>' : ''}<div class="row wrap" style="margin-top:10px"><button class="sm primary" id="naton">${icon('bolt')}Use the low-delay engine</button></div>`; }
 
 document.addEventListener('DOMContentLoaded', () => { const pedal = $('#pedal');
   pedal.addEventListener('click', async (e) => { const t = e.target.closest('#natapply, #natoff, #naton'); if(!t) return; const p = natPrefs();
-    if(t.id === 'natoff' || t.id === 'naton'){ p.enabled = t.id === 'naton'; natSave(); confirm2(p.enabled ? 'Switch to the low-delay engine? Neon Peach restarts its sound.' : 'Switch to the browser engine? Neon Peach restarts its sound.', () => { try{ saveState(); }catch(err){} location.reload(); }, 'Restart sound'); return; }
+    if(t.id === 'natoff' || t.id === 'naton'){ p.enabled = t.id === 'naton'; natSave(); if(p.enabled && npNative.reset) await npNative.reset(); confirm2(p.enabled ? 'Switch to the low-delay engine? Neon Peach restarts its sound.' : 'Switch to the browser engine? Neon Peach restarts its sound.', () => { try{ saveState(); }catch(err){} location.reload(); }, 'Restart sound'); return; }
     // apply device settings
     const v = (id) => { const el = document.getElementById(id); return el ? el.value : null; };
     const api = v('natapi'); if(api !== p.api){ p.api = api; p.outName = null; p.inName = null; } else { p.outName = v('natout'); p.inName = v('natin') || p.outName; }
