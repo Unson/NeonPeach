@@ -7,7 +7,12 @@ function face(family, file, extra){ const p=path.join(__dirname,'node_modules',f
 (async()=>{
 const fonts=[
   face('Tilt Neon','@fontsource/tilt-neon/files/tilt-neon-latin-400-normal.woff2','font-weight:400;font-style:normal;'),
-  face('Saira','@fontsource-variable/saira/files/saira-latin-wdth-normal.woff2','font-weight:100 900;font-stretch:50% 125%;font-style:normal;')
+  face('Saira','@fontsource-variable/saira/files/saira-latin-wdth-normal.woff2','font-weight:100 900;font-stretch:50% 125%;font-style:normal;'),
+  ...[400,500,600,700].map(w=>face('Barlow','@fontsource/barlow/files/barlow-latin-'+w+'-normal.woff2','font-weight:'+w+';font-style:normal;')),
+  // readouts and labels: a condensed face, a step heavier than asked so thin weights still read on glass
+  face('NP Display','@fontsource/barlow-condensed/files/barlow-condensed-latin-500-normal.woff2','font-weight:100 500;font-style:normal;'),
+  face('NP Display','@fontsource/barlow-condensed/files/barlow-condensed-latin-600-normal.woff2','font-weight:501 650;font-style:normal;'),
+  face('NP Display','@fontsource/barlow-condensed/files/barlow-condensed-latin-700-normal.woff2','font-weight:651 900;font-style:normal;')
 ].join('\n');
 const namWasm=await wat2wasm(r('wasm/namkern.wat')), trainWasm=await wat2wasm(r('wasm/lstmtrain.wat'));
 const css=r('style.css').replace('/*FONTS*/', fonts), worklets=r('worklets.js')+'\n'+r('worklets2.js'), engine=r('engine.js')+'\n'+r('fx2.js'), namcore=r('namcore.js'), cloner=r('cloner.js'), ui=r('ui.js'), ui2=r('ui2.js'), ui3=r('ui3.js'), ui4=r('ui4.js'), ui5=r('ui5.js'), stretch=r('stretch.js'), nshim=r('nshim.js'), native=r('native.js'), desktop=r('desktop.js');
