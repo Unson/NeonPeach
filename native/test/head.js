@@ -20,7 +20,7 @@ function render(type, params){
   sb.AudioWorkletNode.prototype = sh.classes.NWorklet.prototype; sb.globalThis = sb; vm.createContext(sb); vm.runInContext(HARNESS, sb); const A = sb.__api; A.NP.ctx = ctx; A.NP.bpm = 120;
   const b = A.createBlock(type, params || {}); const src = ctx.createBufferSource(); const buf = ctx.createBuffer(1, N, SR); buf.getChannelData(0).set(signal()); src.buffer = buf; src.connect(b.input); b.output.connect(ctx.destination); src.start(0);
   sh.flush(); const L = new Float32Array(N);
-  for(let off = 0; off < N; off += 4800){ const m = Math.min(4800, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
+  for(let off = 0; off < N; off += 4864){ const m = Math.min(4864, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
   return L; }
 function stats(x){ let pk = 0, e = 0, nan = false; for(const v of x.subarray(Math.round(0.1*SR))){ if(!isFinite(v)) nan = true; pk = Math.max(pk, Math.abs(v)); e += v*v; } return {pk, rms: Math.sqrt(e/(x.length - 0.1*SR)), nan}; }
 // energy in dB in a few bands, from a plain DFT on a window in the middle of the second note

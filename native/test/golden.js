@@ -29,7 +29,7 @@ const SKIP = new Set(['clone', 'capture', 'fxloop', 'auxsend']);
     vm.runInContext(HARNESS, sb); const A = sb.__api; A.NP.ctx = ctx; A.NP.bpm = 120;
     const b = A.__build(type); const src = ctx.createBufferSource(); const buf = ctx.createBuffer(1, N, SR); buf.getChannelData(0).set(signal()); src.buffer = buf; src.connect(b.input); b.output.connect(ctx.destination); src.start(0);
     sh.flush(); const out = []; const L = new Float32Array(N), R = new Float32Array(N);
-    for(let off = 0; off < N; off += 4800){ const m = Math.min(4800, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); R.set(r[1], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
+    for(let off = 0; off < N; off += 4864){ const m = Math.min(4864, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); R.set(r[1], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
     return [L, R]; }
   // Chrome side
   const browser = await chromium.launch(); const page = await browser.newPage(); await page.goto('file://' + path.join(__dirname, 'blank.html'));
