@@ -5,3 +5,6 @@ release/
 dist-out/
 build/
 native/third_party/
+native/test/golden-results.json
+native/test/shots/
+app/shots/
