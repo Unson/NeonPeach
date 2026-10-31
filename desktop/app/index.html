@@ -2247,6 +2247,632 @@ registerProcessor('np-vowel', VowelProcessor);
 registerProcessor('np-stutter', StutterProcessor);
 registerProcessor('np-swell', SwellProcessor);
 
+// ===== Neon Peach 2.4 worklets: the drive pedal models =====
+// Every processor here has a C++ twin in native/src/procs_drive.cpp. Keep them in step: the golden test compares them sample by sample.
+// Both run 4x oversampled through the same half-band stages np-shaper uses (HB, HB1, HB2 from worklets2.js), so they add the same SHAPER_LAT delay and shDelay() lines a dry path up with them.
+// Argument order matters: every nonlinear call lands in its own const before it is used, so C++ (which may evaluate arguments in any order) does the same thing.
+
+// ---------- np-tube: one 12AX7 triode stage ----------
+// What a curve cannot do, and a tube does:
+// - the grid draws current when the signal swings it positive. That clamps the top of the wave and charges the coupling cap, which slides the bias down.
+//   The bottom then cuts off harder for a while (the duck) and comes back as the cap drains (the bloom). The slide also means the grid conducts less, so it settles.
+// - plate current follows a 3/2 power law, so cutoff is soft and the two sides of the wave never match.
+// - sag: the supply drops when the stage works hard, so loud playing is held back a little and let go slowly.
+// Numbers are in units of the grid swing from cutoff to grid conduction (VK). Bias 0.5 idles where the two sides of the wave have the same room (the 3/2 law puts that above the middle).
+class TubeProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [ {name:'drive', defaultValue:0.25, minValue:0, maxValue:1, automationRate:k}, {name:'bias', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k}, {name:'sag', defaultValue:0.3, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.ch=[]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length){ for(const o of out) o.fill(0); return true; }
+    const n=out[0].length, g=1+Math.pow(p.drive[0],1.3)*11, B=-0.44+(p.bias[0]-0.5)*0.6, GK=-B, sag=p.sag[0], VK=1.2, sr4=sampleRate*4;
+    const i0=1+B/VK, ic0=i0*Math.sqrt(i0), sc=VK/(1.5*Math.sqrt(i0));   // idle current, and the gain that lets a quiet note pass at unity whatever the bias
+    const cUp=1-Math.exp(-1/(sr4*0.004)), cDn=Math.exp(-1/(sr4*0.1)), sA=1-Math.exp(-1/(sr4*0.015)), sR=1-Math.exp(-1/(sr4*0.25));
+    for(let c=0;c<out.length;c++){ const src=inp[c]||inp[0], o=out[c]; let st=this.ch[c]; if(!st){ st=this.ch[c]={u1:new HB(HB1), u2:new HB(HB2), d2:new HB(HB2), d1:new HB(HB1), cap:0, ps:0}; }
+      const u1=st.u1, u2=st.u2, d2=st.d2, d1=st.d1;
+      const tube=(x)=>{ const sh=0.5*st.cap/(st.cap+1); let v=x*g-sh, ig=0; const gc=v-GK; if(gc>0){ const cl=gc/(1+gc*4); v=GK+cl; ig=gc-cl; }   // the bias slide, then grid conduction: a firm clamp on top, and the current it draws
+        st.cap = ig>st.cap ? st.cap+(ig-st.cap)*cUp : st.cap*cDn;                                                                      // the coupling cap charges fast and drains slow
+        const t=1+(v+B)/VK, ic=t>0?t*Math.sqrt(t):0, y=(ic-ic0)*sc;                                                                   // plate current: 3/2 power, nothing below cutoff
+        const ay=Math.abs(y); st.ps += (ay-st.ps)*(ay>st.ps?sA:sR); return y/(1+sag*st.ps*1.5); };                                    // sag follows how hard the stage works
+      for(let i=0;i<n;i++){ u1.up(src[i]); const a=u1.a, bb=u1.b; u2.up(a); const s0=tube(u2.a), s1=tube(u2.b); const e=d2.down(s0,s1); u2.up(bb); const s2=tube(u2.a), s3=tube(u2.b); const od=d2.down(s2,s3); o[i]=d1.down(e,od); } }
+    return true; }
+}
+
+// ---------- np-fuzz: a germanium Fuzz Face ----------
+// Two transistor stages. Each saturates hard on top and cuts off softly below, so the wave leans. The second stage's bias is where the pedal lives:
+// Bias sets it (starved and spitty at one end, smooth at the other), a loud signal drags it toward cutoff like the real cap charging up,
+// and Gate starves it when the input is quiet, so decays break up and sputter. Play softer and both stages clip less: the fuzz cleans up.
+class FuzzProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [ {name:'fuzz', defaultValue:0.7, minValue:0, maxValue:1, automationRate:k}, {name:'bias', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k}, {name:'gate', defaultValue:0, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.ch=[]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length){ for(const o of out) o.fill(0); return true; }
+    const n=out[0].length, g1=2.5, g2=2+Math.pow(p.fuzz[0],1.5)*22, B2=(p.bias[0]-0.5)*1.2, gate=p.gate[0], sr4=sampleRate*4;
+    const eA=1-Math.exp(-1/(sr4*0.003)), eR=Math.exp(-1/(sr4*0.08));
+    const tr=(v)=>v>0?Math.tanh(v):(Math.exp(3*v)-1)/3;   // a transistor stage: saturates on top, cuts off below (slope 1 at rest, then nothing)
+    for(let c=0;c<out.length;c++){ const src=inp[c]||inp[0], o=out[c]; let st=this.ch[c]; if(!st){ st=this.ch[c]={u1:new HB(HB1), u2:new HB(HB2), d2:new HB(HB2), d1:new HB(HB1), env:0}; }
+      const u1=st.u1, u2=st.u2, d2=st.d2, d1=st.d1;
+      const fz=(x)=>{ const ax=Math.abs(x); st.env = ax>st.env ? st.env+(ax-st.env)*eA : st.env*eR; const lv=Math.min(1, st.env*6);   // how hard the input is hitting, 0..1
+        const y1=tr(x*g1*(0.5+0.5*lv));                                                                                              // the first stage's gain climbs with its current, so a quiet note gets less of it: that is the clean-up
+        const off=B2-gate*(1-lv)*3-lv*0.3; return tr(y1*g2+off)-tr(off); };                                                           // Gate starves a quiet signal; a loud one drags the bias toward cutoff
+      for(let i=0;i<n;i++){ u1.up(src[i]); const a=u1.a, bb=u1.b; u2.up(a); const s0=fz(u2.a), s1=fz(u2.b); const e=d2.down(s0,s1); u2.up(bb); const s2=fz(u2.a), s3=fz(u2.b); const od=d2.down(s2,s3); o[i]=d1.down(e,od); } }
+    return true; }
+}
+
+registerProcessor('np-tube', TubeProcessor);
+registerProcessor('np-fuzz', FuzzProcessor);
+
+// ===== Neon Peach 2.4 worklets: the dyn pedal models =====
+// Every processor here has a C++ twin in native/src/procs_dyn.cpp. Keep them in step: the golden test compares them sample by sample.
+// All of these add no delay. No look-ahead anywhere.
+
+// One step of a 2-pole state-variable filter (Zavalishin TPT). st holds ic1, ic2 and gets lp, bp (raw, peak gain 1/k) and hp.
+// g = tan(pi*fc/sr), k = 1/Q. A k just under zero makes it ring on its own.
+function dynSvf(st, x, g, k){ const a1=1/(1+g*(g+k)), a2=g*a1, a3=g*a2, v3=x-st.ic2, v1=a1*st.ic1+a2*v3, v2=st.ic2+a2*st.ic1+a3*v3;
+  st.ic1=2*v1-st.ic1; st.ic2=2*v2-st.ic2; st.lp=v2; st.bp=v1; st.hp=x-k*v1-v2; }
+function dynSvfG(fc){ return Math.tan(Math.PI*clamp(fc,10,sampleRate*0.45)/sampleRate); }
+// a gentle OTA-style input stage: tanh with the gain set so a 0.35 peak comes out at 0.35 again. As kd goes to zero it becomes a straight wire.
+function dynOtaNrm(kd){ return 0.35/Math.tanh(0.35*kd); }
+function dynOta(x, kd, nrm){ return Math.tanh(kd*x)*nrm; }
+
+// ---------- Super Squeeze: four compressor circuits ----------
+// 0 OTA (Dyna Comp): feedback detector, gain smoothed in the linear domain (the cap on the OTA), ratio runs double, release three times the knob, a little CA3080 grit. Squashy sustain, pumps when pushed.
+// 1 Opto (LA-2A): soft knee, attack no faster than 3 ms, two-stage release. A slow memory part charges while it squashes and lets go slowly after.
+// 2 FET (1176): feedback detector, attack ten times faster than the knob, bites when pushed.
+// 3 VCA: feed-forward, clean. The same math as np-comp, so old presets sound the same.
+class PCompProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'threshold', defaultValue:-22, minValue:-80, maxValue:0, automationRate:k},
+    {name:'ratio', defaultValue:4, minValue:1, maxValue:100, automationRate:k},
+    {name:'attack', defaultValue:8, minValue:0.05, maxValue:200, automationRate:k},
+    {name:'release', defaultValue:120, minValue:5, maxValue:3000, automationRate:k},
+    {name:'knee', defaultValue:8, minValue:0, maxValue:30, automationRate:k},
+    {name:'makeup', defaultValue:4, minValue:-24, maxValue:36, automationRate:k},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1, automationRate:k},
+    {name:'schpf', defaultValue:80, minValue:10, maxValue:1000, automationRate:k},
+    {name:'rms', defaultValue:0, minValue:0, maxValue:1, automationRate:k},
+    {name:'auto', defaultValue:1, minValue:0, maxValue:1, automationRate:k},
+    {name:'type', defaultValue:3, minValue:0, maxValue:3, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.env=0; this.e2=0; this.gl=1; this.hz=0; this.hx=0; this.ms=0; this.minGr=0; this.tick=0; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, nc=out.length, type=Math.round(p.type[0]), T=p.threshold[0], R0=Math.max(1,p.ratio[0]), mix=p.mix[0], rms=p.rms[0]>0.5;
+    const R = type===0 ? 1+(R0-1)*2 : R0;                                   // the OTA squashes about twice as hard as its knob says
+    const W = type===1 ? Math.max(p.knee[0],10) : p.knee[0];                 // the photocell always has a soft knee
+    const mk=Math.pow(10,(p.makeup[0]+p.auto[0]*0.6*Math.max(0,-T)*(1-1/R0))/20);   // auto: the make-up the browser's own compressor added, so old presets keep their level
+    let atkMs=p.attack[0], relMs=p.release[0]; if(type===1) atkMs=Math.max(atkMs,3); else if(type===2) atkMs*=0.1; else if(type===0) relMs*=3;
+    const fb = type===0||type===2;                                           // these two listen to their own output
+    const aA=Math.exp(-1/(sampleRate*atkMs/1000)), aR=Math.exp(-1/(sampleRate*relMs/1000)), hp=Math.exp(-2*Math.PI*p.schpf[0]/sampleRate), aM=Math.exp(-1/(sampleRate*0.01));
+    const cA = fb ? Math.min(1-aA, 1/R) : 1-aA, cR=1-aR;                     // a feedback loop can only move so fast per sample and stay stable
+    const cM=1-Math.exp(-1/(sampleRate*relMs*4/1000)), cM2=1-Math.exp(-1/(sampleRate*relMs*10/1000));   // opto memory: charges slowly, lets go slower
+    const sl=1/R-1;
+    for(let i=0;i<n;i++){
+      let s=0; for(let c=0;c<inp.length;c++) s+=inp[c][i]; s/=inp.length;
+      const h=hp*(this.hz+s-this.hx); this.hx=s; this.hz=h;                 // one-pole high-pass on the detector only
+      let lv; if(rms){ this.ms=aM*this.ms+(1-aM)*h*h; lv=Math.sqrt(this.ms)*1.414; } else lv=Math.abs(h);
+      if(fb) lv*=this.gl;                                                    // feedback: the detector hears the compressed sound
+      const x=20*Math.log10(lv+1e-9); let y;
+      const d=x-T; if(2*d < -W) y=x; else if(W>0 && 2*Math.abs(d)<=W){ const q=d+W/2; y=x+sl*q*q/(2*W); } else y=T+d/R;
+      let tgt=y-x; if(fb) tgt*=R;                                            // in a feedback loop the law is steeper; the loop settles at the same ratio
+      let env;
+      if(type===0){ const gt=Math.pow(10,tgt/20); this.gl = gt<this.gl ? this.gl+cA*(gt-this.gl) : this.gl+cR*(gt-this.gl); env=20*Math.log10(this.gl); }   // linear domain: the cap on the OTA
+      else if(type===1){ let e1=this.env-this.e2;
+        if(tgt<this.env){ e1+=cA*(tgt-this.env); this.e2+=cM*(0.5*this.env-this.e2); }                                     // squashing: memory charges toward half the reduction
+        else { this.e2+=cM2*(0.5*tgt-this.e2); const t1=Math.min(0,tgt-this.e2); e1+=cR*(t1-e1); }                          // letting go: the fast half first, the memory crawls back
+        this.env=e1+this.e2; env=this.env; this.gl=Math.pow(10,env/20); }
+      else { this.env = tgt<this.env ? this.env+cA*(tgt-this.env) : this.env+cR*(tgt-this.env); env=this.env; this.gl=Math.pow(10,env/20); }
+      if(env<this.minGr) this.minGr=env;
+      const g=this.gl*mk;
+      for(let c=0;c<nc;c++){ const xx=(inp[c]||inp[0])[i]; let yy=xx*g; if(type===0) yy=Math.tanh(yy*0.4)/0.4; else if(type===2) yy=Math.tanh(yy*0.3)/0.3; out[c][i]=yy*mix+xx*(1-mix); }
+    }
+    this.tick+=n; if(this.tick>sampleRate/30){ this.tick=0; this.port.postMessage({gr:this.minGr}); this.minGr=0; }
+    return true; }
+}
+
+// ---------- Peach Gate: NS-2 style ----------
+// Opens above Threshold, closes only once the sound falls Hysteresis dB under it and stays there for Hold. The detector is slow enough
+// that a low note's own wobble never flips it. Decay 0 shuts the gate to Range; at 100 the gain follows the note down (4 dB for each dB under the close level).
+class PGateProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'threshold', defaultValue:-55, minValue:-90, maxValue:0, automationRate:k},
+    {name:'attack', defaultValue:1, minValue:0.1, maxValue:100, automationRate:k},
+    {name:'release', defaultValue:120, minValue:5, maxValue:2000, automationRate:k},
+    {name:'hold', defaultValue:40, minValue:0, maxValue:1000, automationRate:k},
+    {name:'range', defaultValue:-80, minValue:-90, maxValue:0, automationRate:k},
+    {name:'hyst', defaultValue:6, minValue:0, maxValue:20, automationRate:k},
+    {name:'decay', defaultValue:0, minValue:0, maxValue:100, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.env=0; this.g=0; this.hold=0; this.open=false; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, thrO=Math.pow(10,p.threshold[0]/20), cdB=p.threshold[0]-p.hyst[0], thrC=Math.pow(10,cdB/20), rdB=p.range[0], d=p.decay[0]/100;
+    const envRel=Math.exp(-1/(sampleRate*0.06)), atk=Math.exp(-1/(sampleRate*p.attack[0]/1000)), rel=Math.exp(-1/(sampleRate*p.release[0]/1000)), holdS=sampleRate*p.hold[0]/1000;
+    for(let i=0;i<n;i++){
+      let a=0; for(let c=0;c<inp.length;c++){ const v=Math.abs(inp[c][i]); if(v>a) a=v; }
+      this.env = a>this.env ? a : this.env*envRel;
+      if(this.env>thrO){ this.open=true; this.hold=holdS; } else if(this.env<thrC){ if(this.hold>0) this.hold--; else this.open=false; }
+      let tg; if(this.open) tg=1; else { const eDB=Math.max(rdB, Math.min(0, 4*(20*Math.log10(this.env+1e-9)-cdB))); tg=Math.pow(10,(rdB*(1-d)+eDB*d)/20); }
+      this.g = tg>this.g ? tg+(this.g-tg)*atk : tg+(this.g-tg)*rel;
+      for(let c=0;c<out.length;c++) out[c][i]=(inp[c]||inp[0])[i]*this.g;
+    }
+    return true; }
+}
+
+// ---------- Brickwall: no look-ahead. Fast gain plus a soft safety clip at the ceiling ----------
+// Hard is the old limiter exactly. Soft eases in from 3 dB under the ceiling and, after a long squash, lets go up to three times slower.
+class PLimitProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [ {name:'ceiling', defaultValue:-1, minValue:-30, maxValue:0, automationRate:k}, {name:'release', defaultValue:80, minValue:5, maxValue:2000, automationRate:k}, {name:'input', defaultValue:0, minValue:-24, maxValue:36, automationRate:k}, {name:'type', defaultValue:0, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.env=0; this.minG=1; this.tick=0; this.hot=0; }
+  process(inputs, outputs, p){ if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length){ for(const o of out) o.fill(0); return true; }
+    const n=out[0].length, cl=Math.pow(10,p.ceiling[0]/20), gi=Math.pow(10,p.input[0]/20), relMs=p.release[0], rel=Math.exp(-1/(sampleRate*relMs/1000)), atk=Math.exp(-1/(sampleRate*0.0004)), k=0.9*cl, r=cl-k, soft=p.type[0]>0.5;
+    const cH=1-Math.exp(-1/(sampleRate*0.2)), cH2=1-Math.exp(-1/(sampleRate*1.0)), cdB=20*Math.log10(cl), W=6;
+    for(let i=0;i<n;i++){ let pk=0; for(let c=0;c<inp.length;c++){ const v=Math.abs(inp[c][i]*gi); if(v>pk) pk=v; }
+      let g;
+      if(soft){ const rl=Math.exp(-1/(sampleRate*relMs*(1+2*this.hot)/1000)); this.env = pk>this.env ? atk*this.env+(1-atk)*pk : rl*this.env+(1-rl)*pk;
+        const x=20*Math.log10(this.env+1e-9), dd=x-cdB; let y; if(2*dd < -W) y=x; else if(2*dd<=W){ const q=dd+W/2; y=x-q*q/(2*W); } else y=cdB;
+        g=Math.pow(10,(y-x)/20); this.hot += g<0.999 ? cH*(1-this.hot) : -cH2*this.hot; }
+      else { this.env = pk>this.env ? atk*this.env+(1-atk)*pk : rel*this.env+(1-rel)*pk; g=this.env>cl ? cl/this.env : 1; }
+      if(g<this.minG) this.minG=g;
+      for(let c=0;c<out.length;c++){ let v=(inp[c]||inp[0])[i]*gi*g; const a=Math.abs(v); if(a>k){ v=Math.sign(v)*(k+r*Math.tanh((a-k)/r)); } out[c][i]=v; } }
+    this.tick+=n; if(this.tick>sampleRate/30){ this.tick=0; this.port.postMessage({gr:20*Math.log10(this.minG)}); this.minG=1; }
+    return true; }
+}
+
+// ---------- Envelope Filter: Mutron III / Q-Tron style ----------
+// A fast peak follower (its own attack and decay) sweeps a 2-pole state-variable filter. Reso near the top lets it ring on its own, held
+// to a modest level by damping that grows with the resonance (like the OTA running out of headroom). Gain drives the input stage.
+class PEnvFProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'sens', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k},
+    {name:'fmin', defaultValue:120, minValue:40, maxValue:2000, automationRate:k},
+    {name:'range', defaultValue:0.7, minValue:0, maxValue:1, automationRate:k},
+    {name:'q', defaultValue:4, minValue:0.5, maxValue:20, automationRate:k},
+    {name:'attack', defaultValue:8, minValue:1, maxValue:200, automationRate:k},
+    {name:'decay', defaultValue:180, minValue:10, maxValue:1500, automationRate:k},
+    {name:'type', defaultValue:0, minValue:0, maxValue:2, automationRate:k},
+    {name:'dir', defaultValue:0, minValue:0, maxValue:1, automationRate:k},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1, automationRate:k},
+    {name:'gain', defaultValue:0, minValue:0, maxValue:100, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.env=0; this.sm=0; this.f=[{ic1:0,ic2:0,lp:0,bp:0,hp:0},{ic1:0,ic2:0,lp:0,bp:0,hp:0}]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, atk=Math.exp(-1/(sampleRate*p.attack[0]/1000)), dec=Math.exp(-1/(sampleRate*p.decay[0]/1000));
+    const fmin=p.fmin[0], fmax=Math.min(fmin*Math.pow(40,p.range[0]), 9000), q=p.q[0], type=Math.round(p.type[0]), dir=p.dir[0], mix=p.mix[0], sens=Math.pow(10, p.sens[0]*3);
+    const qn=q/20, k0=1/q-0.08*Math.pow(qn,8), kn=0.15*qn*qn;                 // damping: just under zero at the very top of Reso, so it can sing; kn is how fast loud ringing damps itself
+    const drv=p.gain[0], kd=drv/100*6, nrm=drv>0?dynOtaNrm(kd):1;
+    for(let i=0;i<n;i++){
+      let a=0; for(let c=0;c<inp.length;c++){ const v=Math.abs(inp[c][i]); if(v>a) a=v; }
+      this.env = a>this.env ? a+(this.env-a)*atk : a+(this.env-a)*dec;
+      let e=clamp(this.env*sens*0.3,0,1); e=Math.sqrt(e); if(dir>0.5) e=1-e;
+      const fc=fmin*Math.pow(fmax/fmin,e); this.sm += 0.02*(fc-this.sm);
+      const g=dynSvfG(this.sm);
+      for(let c=0;c<out.length;c++){ const x=(inp[c]||inp[0])[i], st=this.f[c<2?c:0]; const xd = drv>0 ? dynOta(x,kd,nrm) : x;
+        dynSvf(st, xd, g, k0+kn*st.ic1*st.ic1);                             // the louder it rings, the more it damps itself
+        const y = type===0?st.lp:(type===1?st.bp*1.5:st.hp);
+        out[c][i]=y*mix + x*(1-mix); }
+    }
+    return true; }
+}
+
+// ---------- Pedal Wah: Cry Baby / Bass 105Q / Vox ----------
+// The inductor wah: a resonant peak that sweeps, a low-pass behind it, and some gain at the peak. Swept per sample so pedal moves are smooth.
+// The peak gets narrower toward the toe, like the real thing.
+const DYN_WAH=[ {fs:1, qs:1, lpg:0.5, bpg:1.0, hpg:0, og:0.45}, {fs:0.75, qs:0.8, lpg:1.0, bpg:0.6, hpg:0, og:0.6}, {fs:1.15, qs:1.25, lpg:0.35, bpg:1.1, hpg:0.25, og:0.4} ];   // Cry Baby, Bass 105Q, Vox: sweep scale, width scale, how much low-pass / peak / top, output
+class WahProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'pos', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k},
+    {name:'q', defaultValue:5, minValue:0.5, maxValue:15, automationRate:k},
+    {name:'fmin', defaultValue:350, minValue:100, maxValue:1000, automationRate:k},
+    {name:'fmax', defaultValue:2200, minValue:800, maxValue:5000, automationRate:k},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1, automationRate:k},
+    {name:'model', defaultValue:0, minValue:0, maxValue:2, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.ps=0.5; this.f=[{ic1:0,ic2:0,lp:0,bp:0,hp:0},{ic1:0,ic2:0,lp:0,bp:0,hp:0}]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, m=DYN_WAH[Math.max(0,Math.min(2,Math.round(p.model[0])))], pos=p.pos[0], q=p.q[0], fmin=p.fmin[0], fmax=Math.max(p.fmax[0],fmin*1.01), mix=p.mix[0], cp=1-Math.exp(-1/(sampleRate*0.004));
+    for(let i=0;i<n;i++){
+      this.ps += cp*(pos-this.ps);
+      const fc=fmin*Math.pow(fmax/fmin,this.ps)*m.fs, g=dynSvfG(fc), k=1/(q*m.qs*(0.7+0.6*this.ps));
+      for(let c=0;c<out.length;c++){ const x=(inp[c]||inp[0])[i], st=this.f[c<2?c:0]; dynSvf(st, x, g, k);
+        const y=(st.lp*m.lpg + st.bp*m.bpg + st.hp*m.hpg)*m.og; out[c][i]=y*mix + x*(1-mix); }
+    }
+    return true; }
+}
+
+// ---------- Multi Filter: clean SVF or a Moog-style ladder ----------
+// SVF: 2-pole, LP/HP/BP/Notch. For LP and HP the Reso knob is in dB like the old biquad, so old presets sound the same.
+// Ladder: four one-pole stages with tanh in each, 2x oversampled, feedback from the last stage. Near max Reso it sings on its own.
+class LadderProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'type', defaultValue:0, minValue:0, maxValue:3, automationRate:k},
+    {name:'freq', defaultValue:800, minValue:40, maxValue:12000, automationRate:k},
+    {name:'q', defaultValue:1, minValue:0.3, maxValue:20, automationRate:k},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1, automationRate:k},
+    {name:'model', defaultValue:0, minValue:0, maxValue:1, automationRate:k},
+    {name:'drive', defaultValue:0, minValue:0, maxValue:100, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.sf=800; this.f=[{ic1:0,ic2:0,lp:0,bp:0,hp:0},{ic1:0,ic2:0,lp:0,bp:0,hp:0}]; this.l=[{s1:0,s2:0,s3:0,s4:0,t1:0,t2:0,t3:0,t4:0,s4p:0,u:0},{s1:0,s2:0,s3:0,s4:0,t1:0,t2:0,t3:0,t4:0,s4p:0,u:0}]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, type=Math.round(p.type[0]), freq=p.freq[0], q=p.q[0], mix=p.mix[0], ladder=p.model[0]>0.5, drv=p.drive[0], kd=drv/100*6, nrm=drv>0?dynOtaNrm(kd):1, cf=1-Math.exp(-1/(sampleRate*0.002));
+    const kS = 1/(type<2 ? Math.pow(10,q/20) : q);                           // SVF damping
+    const r=clamp((q-0.3)/19.7,0,1), kL=4.2*r, comp=1+kL*0.35;               // ladder feedback and the bass it gives back
+    for(let i=0;i<n;i++){
+      this.sf += cf*(freq-this.sf);
+      for(let c=0;c<out.length;c++){ const x=(inp[c]||inp[0])[i]; const xd = drv>0 ? dynOta(x,kd,nrm) : x; let y;
+        if(ladder){ const L=this.l[c<2?c:0], fc=clamp(this.sf,20,sampleRate*0.22), gL=1-Math.exp(-Math.PI*fc/sampleRate);   // two half-steps per sample
+          for(let s=0;s<2;s++){ const u=xd-kL*0.5*(L.s4+L.s4p); L.u=u; L.s4p=L.s4; const t0=Math.tanh(u);
+            L.s1+=gL*(t0-L.t1); L.t1=Math.tanh(L.s1); L.s2+=gL*(L.t1-L.t2); L.t2=Math.tanh(L.s2); L.s3+=gL*(L.t2-L.t3); L.t3=Math.tanh(L.s3); L.s4+=gL*(L.t3-L.t4); L.t4=Math.tanh(L.s4); }
+          y = type===0 ? L.s4 : type===1 ? L.u-4*L.s1+6*L.s2-4*L.s3+L.s4 : type===2 ? 4*(L.s2-2*L.s3+L.s4) : L.u-2*L.s1+2*L.s2; y*=comp; }   // Oberheim pole mixing for the other shapes
+        else { const st=this.f[c<2?c:0]; dynSvf(st, xd, dynSvfG(this.sf), kS); y = type===0 ? st.lp : type===1 ? st.hp : type===2 ? kS*st.bp : xd-kS*st.bp; }
+        out[c][i]=y*mix + x*(1-mix); }
+    }
+    return true; }
+}
+
+registerProcessor('np-pcomp', PCompProcessor);
+registerProcessor('np-pgate', PGateProcessor);
+registerProcessor('np-plimit', PLimitProcessor);
+registerProcessor('np-penvf', PEnvFProcessor);
+registerProcessor('np-wah', WahProcessor);
+registerProcessor('np-ladder', LadderProcessor);
+
+// ===== Neon Peach 2.4 worklets: the mod pedal models =====
+// Every processor here has a C++ twin in native/src/procs_mod.cpp. Keep them in step: the golden test compares them sample by sample.
+// Why worklets for the flanger and phaser: their feedback must come back one sample later, like the real circuit. A feedback loop drawn
+// with nodes comes back one render block later, and that block is 128 samples in Chrome but the device buffer in the native engine,
+// so the comb peaks land in different places. Inside a worklet the loop is one sample long in both engines.
+
+// ---------- BBD flanger: one delay line with the feedback, the BBD lowpass and a soft clip all inside the loop ----------
+// model 0 Mistress: slow rounded sweep, dark BBD, feedback stops at 0.8. model 1 ADA: wider sweep, brighter, feedback up to 0.95.
+// model 2 Through-Zero: the dry side waits Manual ms and the wet side sweeps across it. With Negative polarity they cancel at the crossing. That is the jet.
+class FlangerProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'rate', defaultValue:0.3, minValue:0.02, maxValue:10, automationRate:k},
+    {name:'depth', defaultValue:0.6, minValue:0, maxValue:1, automationRate:k},
+    {name:'fb', defaultValue:0.5, minValue:-0.97, maxValue:0.97, automationRate:k},
+    {name:'manual', defaultValue:2, minValue:0.1, maxValue:20, automationRate:k},
+    {name:'mix', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k},
+    {name:'model', defaultValue:0, minValue:0, maxValue:2, automationRate:k},
+    {name:'polarity', defaultValue:0, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.S=8192; this.mask=this.S-1; this.buf=[new Float64Array(this.S), new Float64Array(this.S)]; this.dry=[new Float64Array(this.S), new Float64Array(this.S)];
+    this.w=0; this.ph=0; this.lpz=[0,0]; this.cS=-1; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, nc=Math.min(out.length,2), sr=sampleRate, model=p.model[0]|0;
+    const fbMax=[0.8,0.95,0.85][model], lpHz=[6000,9000,10000][model], oct=p.depth[0]*[1.4,1.8,0][model], lin=model===2 ? p.depth[0]*0.95 : 0;
+    const center=p.manual[0]*0.001*sr, a=1-Math.exp(-2*Math.PI*lpHz/sr), inc=p.rate[0]/sr;
+    const fb=Math.max(-fbMax, Math.min(fbMax, p.fb[0])), mix=p.mix[0], wetG=mix*(1-0.5*Math.abs(fb))*(p.polarity[0]>0.5?-1:1), dryG=1-mix;
+    if(this.cS<0) this.cS=center;   // first block: start at the real setting, no glide in from zero
+    let w=this.w, ph=this.ph, cS=this.cS;
+    for(let i=0;i<n;i++){
+      ph+=inc; if(ph>=1) ph-=1; const tri=ph<0.5 ? 4*ph-1 : 3-4*ph; const lfo=model===0 ? tri*(1.5-0.5*tri*tri) : tri;   // the Mistress rounds the turnarounds
+      cS+=(center-cS)*0.002;   // a Manual move glides, the LFO itself does not
+      let del=model===2 ? cS*(1+lin*lfo) : cS*Math.pow(2, oct*lfo); if(del<2) del=2; let rp=w-del; if(rp<0) rp+=this.S; const ri=rp|0, rf=rp-ri, rj=(ri+1)&this.mask;
+      let dd=cS; if(dd<2) dd=2; let dp=w-dd; if(dp<0) dp+=this.S; const di=dp|0, df=dp-di, dj=(di+1)&this.mask;
+      for(let c=0;c<nc;c++){
+        const b=this.buf[c], x=(inp[c]||inp[0])[i];
+        const y=b[ri]*(1-rf)+b[rj]*rf; const z=this.lpz[c]+a*(y-this.lpz[c]); this.lpz[c]=z;   // the BBD lowpass sits inside the loop
+        const v=x+fb*z; b[w]=Math.tanh(v*0.8)/0.8; this.dry[c][w]=x;                             // soft clip in the loop, like the compander
+        const dry=model===2 ? this.dry[c][di]*(1-df)+this.dry[c][dj]*df : x;
+        out[c][i]=dry*dryG+z*wetG; }
+      w=(w+1)&this.mask; }
+    this.w=w; this.ph=ph; this.cS=cS; return true; }
+}
+
+// ---------- Phaser: first-order allpass stages, swept in octaves, with one-sample feedback ----------
+// model 0 Phase 90: matched stages, triangle sweep, light feedback. model 1 Small Stone: rounder, wider sweep; Color adds regeneration.
+// model 2 Univibe: the four stages sit at different frequencies, and the LFO is a lamp seen by photocells: dim most of the time, a sharp flash once a cycle.
+class PhaserProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'rate', defaultValue:0.5, minValue:0.02, maxValue:12, automationRate:k},
+    {name:'depth', defaultValue:0.7, minValue:0, maxValue:1, automationRate:k},
+    {name:'center', defaultValue:600, minValue:50, maxValue:5000, automationRate:k},
+    {name:'stages', defaultValue:4, minValue:2, maxValue:8, automationRate:k},
+    {name:'fb', defaultValue:0.3, minValue:0, maxValue:1, automationRate:k},
+    {name:'mix', defaultValue:0.5, minValue:0, maxValue:1, automationRate:k},
+    {name:'model', defaultValue:0, minValue:0, maxValue:2, automationRate:k},
+    {name:'color', defaultValue:0, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.x1=[new Float64Array(8), new Float64Array(8)]; this.y1=[new Float64Array(8), new Float64Array(8)]; this.a=new Float64Array(8); this.yp=[0,0]; this.ph=0; this.lamp=0; this.cC=-1; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, nc=Math.min(out.length,2), sr=sampleRate, model=p.model[0]|0, st=Math.max(2,Math.min(8,Math.round(p.stages[0]/2)*2)), center=p.center[0], inc=p.rate[0]/sr;
+    const oct=p.depth[0]*(model===1?2.0:1.6), g=Math.min(0.92, p.fb[0]*0.8+(model===1&&p.color[0]>0.5?0.7:0));
+    // mix: dry and wet add up to one, so mix 50 gives the deepest notches; the whole thing is pulled back a little as mix rises because allpass chains grow peaks
+    const mix=p.mix[0], trim=1-0.25*mix, wetG=mix*(1-0.5*g)*trim, dryG=(1-mix)*trim;
+    const aUp=1-Math.exp(-1/(sr*0.003)), aDn=1-Math.exp(-1/(sr*0.04)), fmax=sr*0.45;
+    const R=model===2 ? [0.3,1,3.2,10,0.3,1,3.2,10] : [1,1,1,1,1,1,1,1];
+    if(this.cC<0) this.cC=center;
+    let ph=this.ph, lamp=this.lamp, cC=this.cC; const a=this.a;
+    for(let i=0;i<n;i++){
+      ph+=inc; if(ph>=1) ph-=1; cC+=(center-cC)*0.002;
+      let l; if(model===2){ const u=(1+Math.sin(2*Math.PI*ph))/2, bb=u*u*u; lamp+=(bb-lamp)*(bb>lamp?aUp:aDn); l=2.4*lamp-0.9; if(l>1) l=1; }
+      else { const tri=ph<0.5 ? 4*ph-1 : 3-4*ph; l=model===1 ? tri*(1.5-0.5*tri*tri) : tri; }
+      const sw=Math.pow(2, oct*l);
+      for(let s=0;s<st;s++){ let f=cC*R[s]*sw; if(f>fmax) f=fmax; if(f<20) f=20; const t=Math.tan(Math.PI*f/sr); a[s]=(t-1)/(t+1); }
+      for(let c=0;c<nc;c++){ const x=(inp[c]||inp[0])[i], X=this.x1[c], Y=this.y1[c]; let v=x+g*this.yp[c];
+        for(let s=0;s<st;s++){ const y=a[s]*v+X[s]-a[s]*Y[s]; X[s]=v; Y[s]=y; v=y; }
+        this.yp[c]=v; out[c][i]=x*dryG+v*wetG; } }
+    this.ph=ph; this.lamp=lamp; this.cC=cC; return true; }
+}
+
+// ---------- Bit crusher 2: the old crusher plus a lowpass before and after the downsampler, so it can do clean lo-fi as well as harsh ----------
+class Crusher2Processor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [
+    {name:'bits', defaultValue:8, minValue:2, maxValue:16},
+    {name:'rate', defaultValue:1, minValue:1, maxValue:64},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1},
+    {name:'filter', defaultValue:0, minValue:0, maxValue:1} ]; }
+  constructor(){ super(); this.cnt=0; this.hold=[0,0]; this.z=new Float64Array(16); onKill(this); }   // z: pre and post filter state, 4 doubles each, per channel
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, steps=Math.pow(2,p.bits[0]), rate=p.rate[0]|0, mix=p.mix[0], filt=p.filter[0]>0.5, z=this.z;
+    // Butterworth lowpass a little under the new Nyquist (half the downsampled rate)
+    const w0=2*Math.PI*Math.min(0.42/rate, 0.45), sn=Math.sin(w0), cs=Math.cos(w0), al=sn/(2*0.7071), a0=1+al;
+    const b0=(1-cs)/2/a0, b1=(1-cs)/a0, a1=-2*cs/a0, a2=(1-al)/a0;
+    for(let i=0;i<n;i++){
+      this.cnt++; const take = this.cnt>=rate; if(take) this.cnt=0;
+      for(let c=0;c<out.length;c++){
+        let x=(inp[c]||inp[0])[i]; const k=c&1, o=k*8;
+        if(filt){ const y=b0*x+b1*z[o]+b0*z[o+1]-a1*z[o+2]-a2*z[o+3]; z[o+1]=z[o]; z[o]=x; z[o+3]=z[o+2]; z[o+2]=y; x=y; }
+        if(take) this.hold[k]=Math.round(x*steps)/steps;
+        let h=this.hold[k];
+        if(filt){ const y=b0*h+b1*z[o+4]+b0*z[o+5]-a1*z[o+6]-a2*z[o+7]; z[o+5]=z[o+4]; z[o+4]=h; z[o+7]=z[o+6]; z[o+6]=y; h=y; }
+        out[c][i]=h*mix + x*(1-mix);
+      }
+    }
+    return true;
+  }
+}
+
+registerProcessor('np-flanger', FlangerProcessor);
+registerProcessor('np-phaser', PhaserProcessor);
+registerProcessor('np-crusher2', Crusher2Processor);
+
+// ===== Neon Peach 2.4 worklets: the time pedal models =====
+// Every processor here has a C++ twin in native/src/procs_time.cpp. Keep them in step: the golden test compares them sample by sample.
+// np-delay: the four delay machines. np-taps: the multi-tap. np-verb: an 8-line feedback delay network reverb with a spring mode. np-oc2: a Boss OC-2 style sub octave. np-pitch2: a two-grain shifter that splices where the waves line up.
+
+// The next prime at or above n. Delay lines with prime lengths never share a ring.
+function primeAbove(n){ n=Math.max(2,Math.round(n)); for(;;n++){ let ok=true; for(let d=2;d*d<=n;d++){ if(n%d===0){ ok=false; break; } } if(ok) return n; } }
+// A delay line read with linear interpolation. d is the delay in samples (fractional), w the write index, S the size.
+function tapRead(b, w, d, S){ let r=w-d; if(r<0) r+=S; const i0=r|0, f=r-i0; let i1=i0+1; if(i1>=S) i1-=S; return b[i0]*(1-f)+b[i1]*f; }
+
+// Deterministic noise: the same seed in both engines gives the same hiss.
+function lcg(s){ return (Math.imul(s,1664525)+1013904223)>>>0; }
+
+// ---------- Delay: four machines in one processor ----------
+// The feedback loop lives in here, not in the node graph, so both engines repeat at exactly the same time.
+// Digital: clean, with an optional 12-bit / 12 kHz lo-fi in the loop. Tape (EP-3 / RE-201): wow (0.42 Hz) and flutter (5.7 Hz) on the
+// read head, a head bump at 110 Hz, tape saturation and hiss in the loop, highs that fade a little more each pass. Analog (DM-2 / Memory
+// Man): a bucket-brigade chip with 4096 stages, so the clock slows and the anti-alias filter closes as the time grows; the repeats are
+// sampled at that clock, soft clipped to one side, and get darker and grainier. Ping Pong: the digital machine bouncing left and right.
+class DelayProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'type', defaultValue:0, minValue:0, maxValue:3, automationRate:k}, {name:'time', defaultValue:375, minValue:1, maxValue:3900, automationRate:k},
+    {name:'fb', defaultValue:0.35, minValue:0, maxValue:1, automationRate:k}, {name:'lowcut', defaultValue:120, minValue:20, maxValue:1000, automationRate:k},
+    {name:'highcut', defaultValue:5000, minValue:500, maxValue:12000, automationRate:k}, {name:'mod', defaultValue:0, minValue:0, maxValue:1, automationRate:k},
+    {name:'age', defaultValue:0.25, minValue:0, maxValue:1, automationRate:k}, {name:'lofi', defaultValue:0, minValue:0, maxValue:1, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.S=Math.ceil(sampleRate*4.2); this.buf=[new Float32Array(this.S), new Float32Array(this.S)]; this.w=0; this.d=-1; this.ph1=0; this.ph2=0; this.seed=22222;
+    this.hp=[0,0,0,0]; this.lp=[0,0,0,0,0,0,0,0,0,0]; this.bump=[new SVF(), new SVF()]; this.dc=[0,0]; this.acc=[0,0]; this.hold=[0,0]; this.cnt=0; this.qh=[0,0]; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0], n=out[0].length, S=this.S, sr=sampleRate, has=inp&&inp.length;
+    const type=Math.round(p.type[0]), tape=type===1, analog=type===2, pp=type===3, age=p.age[0], mod=p.mod[0], lofi=p.lofi[0], ms=p.time[0];
+    const target=Math.min(S-sr*0.3, ms*sr/1000); if(this.d<0) this.d=target; const dc=1-Math.exp(-1/(sr*0.05));
+    const fbg=p.fb[0]*(tape||analog?1:0.95);
+    // the loop filters: low cut (2 poles), high cut (2 poles, 2 more for analog, 1 more for tape), head bump, the BBD clock, tape hiss
+    const chp=lpCoef(p.lowcut[0]), bw=analog ? Math.min(p.highcut[0], clamp(900000/ms,700,7000)) : p.highcut[0], clp=lpCoef(bw), clp2=lpCoef(tape?5500-2500*age:bw);
+    const bumpG=tape?Math.pow(10,2.5*(0.5+age)/20)-1:0, clk=clamp(4096*1000/(2*ms),2500,40000)/sr, grit=analog?0.15+0.5*age:0, hiss=tape?0.0004*age:(analog?0.00015*age:0);
+    const sg=tape?1+0.5*age:1, kt=tape?0.6+1.4*age:1, kb=0.8+1.5*age, bb=0.1+0.2*age, tb=Math.tanh(kb*bb), nb=kb*(1-tb*tb);
+    const f1=tape?0.42:(analog?0.6:0.3), f2=tape?5.7:(analog?7.1:0.3), D1=mod*sr*(tape?0.0035*(0.6+0.8*age):(analog?0.002:0.0025)), D2=mod*sr*(tape?0.00014*(0.5+age):(analog?0.00006:0));
+    const r1=2*Math.PI*f1/sr, r2=2*Math.PI*f2/sr, hp=this.hp, lp=this.lp, buf=this.buf;
+    for(let i=0;i<n;i++){
+      const xL=has?inp[0][i]:0, xR=has?(inp[1]||inp[0])[i]:0;
+      this.d+=dc*(target-this.d); this.ph1+=r1; if(this.ph1>2*Math.PI) this.ph1-=2*Math.PI; this.ph2+=r2; if(this.ph2>2*Math.PI) this.ph2-=2*Math.PI;
+      const tri=Math.abs(this.ph2/Math.PI-1)*2-1, rd=clamp(this.d+D1*Math.sin(this.ph1)+D2*tri, 1, S-2);
+      const tL=tapRead(buf[0], this.w, rd, S), tR=tapRead(buf[1], this.w, rd, S);
+      this.cnt++; const take=this.cnt>=4; if(take) this.cnt=0;
+      // what goes onto the tape: the input plus the repeat coming round. Ping pong: the left side gets the input and the right side's repeat, the right side gets the left's.
+      const pre0=pp ? 0.5*(xL+xR)+fbg*tR : xL+fbg*tL, pre1=pp ? tL : xR+fbg*tR;
+      for(let c=0;c<2;c++){ let y=c?pre1:pre0; const o=c*2, o5=c*5;
+        hp[o]+=chp*(y-hp[o]); y-=hp[o]; hp[o+1]+=chp*(y-hp[o+1]); y-=hp[o+1];                     // low cut
+        if(analog){ this.acc[c]+=clk; if(this.acc[c]>=1){ this.acc[c]-=1; this.hold[c]=y; } y=y*(1-grit)+this.hold[c]*grit; }   // sampled at the BBD clock; the filters below smooth the steps
+        lp[o5]+=clp*(y-lp[o5]); lp[o5+1]+=clp*(lp[o5]-lp[o5+1]); y=lp[o5+1];                        // high cut
+        if(analog){ lp[o5+2]+=clp*(y-lp[o5+2]); lp[o5+3]+=clp*(lp[o5+2]-lp[o5+3]); y=lp[o5+3]; }     // the BBD filter tracks the clock: two more poles
+        if(tape){ lp[o5+4]+=clp2*(y-lp[o5+4]); y=lp[o5+4]; y+=bumpG*this.bump[c].run(y,110,0.9).bp/0.9; }   // worn tape loses its top; the head bump
+        if(!tape && !analog && lofi>0){ if(take) this.qh[c]=Math.round(y*2048)/2048; y=y*(1-lofi)+this.qh[c]*lofi; }            // 12 bits at 12 kHz
+        if(hiss>0){ this.seed=lcg(this.seed); y+=(this.seed/4294967296-0.5)*hiss; }
+        if(tape){ const u=y*sg; y=Math.tanh(kt*u)/(kt*sg); } else if(analog){ y=(Math.tanh(kb*(y+bb))-tb)/nb; } else { y=y/Math.pow(1+Math.pow(Math.abs(y)/1.2,8),0.125); }   // the machine's own clip
+        this.dc[c]+=0.0005*(y-this.dc[c]); y-=this.dc[c];
+        buf[c][this.w]=y; }
+      this.w++; if(this.w>=S) this.w=0;
+      out[0][i]=tL; if(out[1]) out[1][i]=tR;
+    }
+    return true; }
+}
+
+// ---------- Multi-tap: four taps off one line, feedback from the first ----------
+const TAPS_MUL=[[1,2,3,4],[0.75,1.5,2.25,3],[2/3,4/3,2,8/3],[1,1.618,2.618,4.236]];
+class TapsProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [
+    {name:'time', defaultValue:250, minValue:1, maxValue:2000, automationRate:k}, {name:'fb', defaultValue:0.2, minValue:0, maxValue:0.95, automationRate:k},
+    {name:'highcut', defaultValue:4000, minValue:500, maxValue:12000, automationRate:k}, {name:'spread', defaultValue:0.6, minValue:0, maxValue:1, automationRate:k},
+    {name:'taps', defaultValue:3, minValue:1, maxValue:4, automationRate:k}, {name:'pattern', defaultValue:0, minValue:0, maxValue:3, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); this.S=Math.ceil(sampleRate*8.7); this.buf=new Float32Array(this.S); this.w=0; this.d=[-1,-1,-1,-1]; this.g=[-1,-1,-1,-1]; this.lp=0; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0], n=out[0].length, S=this.S, sr=sampleRate, has=inp&&inp.length;
+    const mul=TAPS_MUL[Math.round(p.pattern[0])]||TAPS_MUL[0], taps=Math.round(p.taps[0]), fb=p.fb[0], clp=lpCoef(p.highcut[0]), dc=1-Math.exp(-1/(sr*0.05)), gc=1-Math.exp(-1/(sr*0.01)), spread=p.spread[0];
+    const tg=[0,0,0,0], td=[0,0,0,0], pL=[0,0,0,0], pR=[0,0,0,0];
+    for(let k=0;k<4;k++){ td[k]=Math.min(S-4, p.time[0]*sr/1000*mul[k]); tg[k]=k<taps?Math.pow(0.7,k):0; if(this.d[k]<0){ this.d[k]=td[k]; this.g[k]=tg[k]; } const pan=(k%2?1:-1)*spread*(k/3), a=(pan+1)*Math.PI/4; pL[k]=Math.cos(a); pR[k]=Math.sin(a); }
+    const b=this.buf, d=this.d, g=this.g;
+    for(let i=0;i<n;i++){
+      const x=has?(inp.length>1?0.5*(inp[0][i]+inp[1][i]):inp[0][i]):0; let oL=0, oR=0, t0=0;
+      for(let k=0;k<4;k++){ d[k]+=dc*(td[k]-d[k]); g[k]+=gc*(tg[k]-g[k]); const v=tapRead(b, this.w, d[k], S); if(k===0) t0=v; oL+=v*g[k]*pL[k]; oR+=v*g[k]*pR[k]; }
+      this.lp+=clp*(t0-this.lp); b[this.w]=x+fb*this.lp; this.w++; if(this.w>=S) this.w=0;
+      out[0][i]=oL; if(out[1]) out[1][i]=oR;
+    }
+    return true; }
+}
+
+// ---------- Reverb: feedback delay network, plus a spring tank ----------
+// Six types. Room, Hall, Plate, Cathedral and Shimmer run 8 delay lines mixed by a Householder matrix, with a one-pole damper in each
+// line, two lines slowly modulated, four diffusion allpasses on each input, early reflections tapped off the pre-delay. Spring runs three
+// springs: a loop with a chain of stretched allpasses, so every echo chirps. Decay is RT60 in seconds: the time the tail takes to fall 60 dB.
+// Per type: delay lines (ms), early taps (ms), early level, diffusion amount, damping (Hz), modulation depth (samples), input low cut (Hz), output level
+const VERB_T=[
+  {l:[13.7,17.9,21.1,25.3,29.9,34.7,39.1,44.3], er:[5.1,8.3,12.7,17.3,22.9,28.1], erg:0.9, dg:0.55, damp:6500, mod:5, hp:60, og:0.11},
+  {l:[31.7,39.1,46.3,55.9,63.1,71.3,79.9,89.7], er:[11.3,17.9,24.1,31.7,39.3,47.1], erg:0.3, dg:0.72, damp:4000, mod:11, hp:45, og:0.14},
+  {l:[9.7,12.1,14.3,17.9,21.1,24.7,28.3,33.1], er:[], erg:0, dg:0.8, damp:11000, mod:9, hp:80, og:0.05},
+  {l:[13.7,17.9,21.1,25.3,29.9,34.7,39.1,44.3], er:[], erg:0, dg:0, damp:3000, mod:0, hp:90, og:0.8},
+  {l:[59.3,71.9,83.1,97.7,109.3,121.1,137.9,149.3], er:[19.3,29.7,41.1,53.9,67.3,79.1], erg:0.25, dg:0.82, damp:1300, mod:14, hp:40, og:0.09},
+  {l:[31.7,39.1,46.3,55.9,63.1,71.3,79.9,89.7], er:[11.3,17.9,24.1,31.7,39.3,47.1], erg:0.3, dg:0.72, damp:5000, mod:11, hp:45, og:0.13} ];
+// The three springs: loop delay (ms), allpass stages, stretch (samples), allpass amount, loop low pass (Hz)
+const SPRINGS=[{d:31,m:48,k:8,a:0.55,lp:3600},{d:37,m:56,k:9,a:0.57,lp:3000},{d:44,m:64,k:10,a:0.6,lp:2600}];   // a positive coefficient makes highs arrive later: the chirp rises, like a real spring
+const AP_MS=[4.76,3.59,12.7,9.3];   // input diffusion allpass lengths (Dattorro); the right side runs 7% longer
+class VerbProcessor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ const k='k-rate'; return [ {name:'type', defaultValue:1, minValue:0, maxValue:5, automationRate:k}, {name:'decay', defaultValue:2, minValue:0.2, maxValue:8, automationRate:k}, {name:'predelay', defaultValue:10, minValue:0, maxValue:200, automationRate:k}, {name:'damp', defaultValue:7000, minValue:500, maxValue:20000, automationRate:k} ]; }
+  constructor(){ super(); onKill(this); const sr=sampleRate;
+    this.SZ=16384; this.PS=32768; this.AS=2048; this.SS=8192;
+    this.line=[]; for(let i=0;i<8;i++) this.line.push(new Float32Array(this.SZ)); this.w=0; this.L=new Float64Array(8); this.g=new Float64Array(8); this.lp=new Float64Array(8);
+    this.pre=[new Float32Array(this.PS), new Float32Array(this.PS)]; this.pw=0;
+    this.ap=[]; for(let i=0;i<8;i++) this.ap.push(new Float32Array(this.AS)); this.apL=new Int32Array(8); for(let i=0;i<8;i++) this.apL[i]=Math.min(this.AS-2, Math.round(sr*AP_MS[i&3]/1000*(i<4?1:1.07))); this.aw=0;
+    this.hpz=[0,0]; this.ph=[0,0]; this.erT=new Float64Array(6); this.erN=0;
+    // springs
+    this.sp=SPRINGS.map(s=>({ buf:new Float32Array(this.SS), xs:new Float64Array(s.m*s.k), ys:new Float64Array(s.m*s.k), q:0, w:0, lp:0, hp:0, d:Math.min(this.SS-4, Math.round(sr*s.d/1000)), g:0, c:1-Math.exp(-2*Math.PI*s.lp/sr) }));
+    this.dz=new Float64Array(8); this.type=-1; this.T60=-1; this.damp=-1; this.tune(1, 2, 7000); }
+  // Set the line lengths and loop gains for a type. Changing type clears the lines, so the old space does not bleed into the new one.
+  tune(type, T60, damp){ const sr=sampleRate; const t=VERB_T[type]||VERB_T[1];
+    if(type!==this.type){ this.type=type; for(const b of this.line) b.fill(0); for(const s of this.sp){ s.buf.fill(0); s.xs.fill(0); s.ys.fill(0); s.lp=0; s.hp=0; } for(const b of this.ap) b.fill(0); this.hpz[0]=this.hpz[1]=0;
+      for(let i=0;i<8;i++) this.L[i]=Math.min(this.SZ-40, primeAbove(sr*t.l[i]/1000)); this.erN=t.er.length; for(let i=0;i<this.erN;i++) this.erT[i]=sr*t.er[i]/1000; }
+    // Decay is RT60 for the body of the sound (around 400 Hz): each line's gain makes up for what its damper takes there, so highs die sooner, like a real room
+    const dmp=Math.min(t.damp, damp), c=1-Math.exp(-2*Math.PI*dmp/sr), comp=Math.sqrt(1+Math.pow(400/t.damp,2));
+    for(let i=0;i<8;i++){ this.g[i]=Math.min(0.995, Math.pow(10, -3*this.L[i]/(sr*T60))*comp); this.lp[i]=c; }
+    // a spring's loop is its delay plus the allpass chain, whose group delay is about half its length for the lows
+    for(let j=0;j<3;j++){ const s=SPRINGS[j], S=this.sp[j]; const len=S.d+s.m*s.k*0.5, k=Math.sqrt(1+Math.pow(400/s.lp,2)); S.g=Math.min(0.995, Math.pow(10, -3*len/(sr*T60))*k); }
+    this.hpc=1-Math.exp(-2*Math.PI*t.hp/sr); this.erg=t.erg; this.dg=t.dg; this.og=t.og; this.mod=t.mod; this.T60=T60; this.damp=damp; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0], n=out[0].length; const has=inp&&inp.length;
+    const type=Math.round(p.type[0]), T60=p.decay[0], damp=p.damp[0]; if(type!==this.type||T60!==this.T60||damp!==this.damp) this.tune(type, T60, damp);
+    const sr=sampleRate, SZ=this.SZ, PS=this.PS, AS=this.AS, pd=Math.min(PS-4, p.predelay[0]*sr/1000), line=this.line, L=this.L, g=this.g, lpc=this.lp, ap=this.ap, apL=this.apL, pre=this.pre;
+    const r1=2*Math.PI*0.31/sr, r2=2*Math.PI*0.47/sr, mod=this.mod, erg=this.erg, dg=this.dg, og=this.og, hpc=this.hpc, spring=type===3;
+    for(let i=0;i<n;i++){
+      const xL=has?inp[0][i]:0, xR=has?(inp[1]||inp[0])[i]:0;
+      pre[0][this.pw]=xL; pre[1][this.pw]=xR; this.pw++; if(this.pw>=PS) this.pw=0;
+      const aL=tapRead(pre[0], this.pw, pd+1, PS), aR=tapRead(pre[1], this.pw, pd+1, PS);
+      let oL=0, oR=0;
+      if(spring){
+        const x=0.5*(aL+aR); let s0=0, s1=0, s2=0;
+        for(let j=0;j<3;j++){ const s=SPRINGS[j], S=this.sp[j], K=s.k, M=s.m, a=s.a;
+          // the loop: what comes round from the far end, low passed and low cut, times the decay gain
+          let z=S.buf[(S.w-S.d+this.SS)%this.SS]; S.lp+=S.c*(z-S.lp); z=S.lp; S.hp+=hpc*(z-S.hp); z-=S.hp;
+          let v=x*0.5+z*S.g;
+          // the spring itself: M stretched allpasses. Highs take longer to get through, so each echo chirps.
+          const q=S.q, xs=S.xs, ys=S.ys; for(let m=0;m<M;m++){ const ix=m*K+q, xd=xs[ix], yd=ys[ix]; const y=a*(v-yd)+xd; xs[ix]=v; ys[ix]=y; v=y; }
+          S.q=q+1; if(S.q>=K) S.q=0; S.buf[S.w]=v; S.w++; if(S.w>=this.SS) S.w=0;
+          if(j===0) s0=v; else if(j===1) s1=v; else s2=v; }
+        oL=(s0+0.5*s2)*og*0.8; oR=(s1+0.5*s2)*og*0.8;
+      } else {
+        // early reflections, straight off the pre-delay line, left and right turn about
+        let eL=0, eR=0; for(let j=0;j<this.erN;j++){ const v=tapRead(pre[j&1], this.pw, pd+1+this.erT[j], PS)*(0.7-0.08*j); if(j&1) eR+=v; else eL+=v; }
+        // input low cut, then four diffusion allpasses a side
+        this.hpz[0]+=hpc*(aL-this.hpz[0]); this.hpz[1]+=hpc*(aR-this.hpz[1]); let dL=aL-this.hpz[0], dR=aR-this.hpz[1];
+        for(let j=0;j<4;j++){ const b=ap[j], rd=(this.aw-apL[j]+AS)%AS, z=b[rd]; const y=z-dg*dL; b[this.aw]=dL+dg*z; dL=y; }
+        for(let j=4;j<8;j++){ const b=ap[j], rd=(this.aw-apL[j]+AS)%AS, z=b[rd]; const y=z-dg*dR; b[this.aw]=dR+dg*z; dR=y; }
+        this.aw++; if(this.aw>=AS) this.aw=0;
+        // read the eight lines; lines 2 and 5 wander a little so nothing rings like metal
+        this.ph[0]+=r1; if(this.ph[0]>2*Math.PI) this.ph[0]-=2*Math.PI; this.ph[1]+=r2; if(this.ph[1]>2*Math.PI) this.ph[1]-=2*Math.PI;
+        const m2=mod*Math.sin(this.ph[0]), m5=mod*Math.sin(this.ph[1]);
+        const r0=tapRead(line[0],this.w,L[0],SZ), rr1=tapRead(line[1],this.w,L[1],SZ), rr2=tapRead(line[2],this.w,L[2]+m2,SZ), r3=tapRead(line[3],this.w,L[3],SZ), r4=tapRead(line[4],this.w,L[4],SZ), r5=tapRead(line[5],this.w,L[5]+m5,SZ), r6=tapRead(line[6],this.w,L[6],SZ), r7=tapRead(line[7],this.w,L[7],SZ);
+        oL=(eL*erg + (r0-rr2+r4-r6))*og; oR=(eR*erg + (rr1-r3+r5-r7))*og;
+        // damp each line, scale by its decay gain, mix with the Householder matrix, add the input, write back
+        const d=this.dz; d[0]+=lpc[0]*(r0-d[0]); d[1]+=lpc[1]*(rr1-d[1]); d[2]+=lpc[2]*(rr2-d[2]); d[3]+=lpc[3]*(r3-d[3]); d[4]+=lpc[4]*(r4-d[4]); d[5]+=lpc[5]*(r5-d[5]); d[6]+=lpc[6]*(r6-d[6]); d[7]+=lpc[7]*(r7-d[7]);
+        const v0=d[0]*g[0], v1=d[1]*g[1], v2=d[2]*g[2], v3=d[3]*g[3], v4=d[4]*g[4], v5=d[5]*g[5], v6=d[6]*g[6], v7=d[7]*g[7];
+        const s=(v0+v1+v2+v3+v4+v5+v6+v7)*0.25, iL=dL*0.5, iR=dR*0.5;
+        line[0][this.w]=v0-s+iL; line[1][this.w]=v1-s-iL; line[2][this.w]=v2-s+iL; line[3][this.w]=v3-s-iL; line[4][this.w]=v4-s+iR; line[5][this.w]=v5-s-iR; line[6][this.w]=v6-s+iR; line[7][this.w]=v7-s-iR;
+        this.w++; if(this.w>=SZ) this.w=0;
+      }
+      out[0][i]=oL; if(out[1]) out[1][i]=oR;
+    }
+    return true; }
+}
+
+// ---------- Sub octave: a Boss OC-2 ----------
+// The input is low passed so mainly the fundamental is left. A comparator with hysteresis turns that into a square at the note's pitch.
+// Two flip-flops divide it by 2 and by 4. The OC-2 trick: the sub is not the square itself. The square switches the sign of the filtered
+// input, so the sub carries the note's own dynamics and dies when the note dies. -2 Oct switches the -1 Oct signal the same way.
+// The up octave is the filtered input rectified, with its DC taken out.
+class OC2Processor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [
+    {name:'sub1', defaultValue:0.7, minValue:0, maxValue:1}, {name:'sub2', defaultValue:0, minValue:0, maxValue:1}, {name:'up', defaultValue:0, minValue:0, maxValue:1},
+    {name:'dry', defaultValue:1, minValue:0, maxValue:1}, {name:'tone', defaultValue:600, minValue:100, maxValue:4000}, {name:'track', defaultValue:300, minValue:100, maxValue:800} ]; }
+  constructor(){ super(); onKill(this); this.l1=0; this.l2=0; this.l3=0; this.l4=0; this.env=0; this.cmp=-1; this.ff1=1; this.ff2=1; this.cnt=0; this.hold=0; this.s1=0; this.s2=0; this.s3=0; this.s4=0; this.u1=0; this.u2=0; this.udc=0; this.flips=0; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, sr=sampleRate, track=p.track[0], tone=p.tone[0];
+    const ct=lpCoef(track), cto=lpCoef(tone), cto2=lpCoef(tone*0.5), cup=lpCoef(Math.min(tone*4,6000)), cdc=lpCoef(40), envA=lpCoef(80), envR=Math.exp(-1/(sr*0.06)), minHold=0.4*sr/track, gate=0.002;
+    const sub1=p.sub1[0]*1.6, sub2=p.sub2[0]*1.5, up=p.up[0]*1.6, dry=p.dry[0];
+    for(let i=0;i<n;i++){
+      const x = inp.length>1 ? (inp[0][i]+inp[1][i])*0.5 : inp[0][i];
+      // two poles for the signal that gets switched, four for the one the comparator watches
+      this.l1+=ct*(x-this.l1); this.l2+=ct*(this.l1-this.l2); this.l3+=ct*(this.l2-this.l3); this.l4+=ct*(this.l3-this.l4);
+      const f=this.l2, c=this.l4, a=Math.abs(c); this.env = a>this.env ? this.env+envA*(a-this.env) : this.env*envR;
+      const h=0.08*this.env; this.hold++;
+      // the comparator arms when the wave goes well below zero, and fires on the next upward zero crossing. Hysteresis keeps harmonics from firing it twice.
+      if(this.cmp<0){ if(c<-h) this.cmp=0; } else if(this.cmp===0){ if(c>0){ this.cmp=1; if(this.hold>minHold && this.env>gate){ this.hold=0; this.ff1=-this.ff1; this.cnt++; if(this.cnt&1) this.ff2=-this.ff2; this.flips++; } } }
+      else if(c<-h) this.cmp=0;
+      // -1 oct: the filtered input, flipped by the first divider, then rounded off by the tone filter
+      const o1=c*this.ff1; this.s1+=cto*(o1-this.s1); this.s2+=cto*(this.s1-this.s2);
+      // -2 oct: the rectified signal switched by the second divider. A square that breathes with the note; the tone filter rounds it.
+      const o2=a*this.ff2; this.s3+=cto2*(o2-this.s3); this.s4+=cto2*(this.s3-this.s4);
+      // +1 oct: full wave rectify the filtered input, take out the DC, round it off
+      let u=Math.abs(f); this.udc+=cdc*(u-this.udc); u-=this.udc; this.u1+=cup*(u-this.u1); this.u2+=cup*(this.u1-this.u2);
+      const y = x*dry + this.s2*sub1 + this.s4*sub2 + this.u2*up;
+      for(let c2=0;c2<out.length;c2++) out[c2][i]=y;
+    }
+    return true; }
+}
+
+// ---------- Pitch shifter: two grains that splice where the waves line up ----------
+// Two read heads walk through a delay line at the pitch ratio, each under a raised-cosine window, half a window apart, so the windows
+// add up to one. When a head reaches the end of its window it jumps back. Instead of jumping to a fixed spot, it tries a range of spots
+// and picks the one where the recent past lines up best with what the other head has been reading (a short correlation search, WSOLA style).
+// On a steady note the splice then lands a whole number of periods away and the warble is gone. Grain sets the window; up shifts use a
+// shorter window so the delay stays short. A new note comes out within about half a window.
+class Pitch2Processor extends AudioWorkletProcessor {
+  static get parameterDescriptors(){ return [
+    {name:'semitones', defaultValue:0, minValue:-24, maxValue:24}, {name:'cents', defaultValue:0, minValue:-100, maxValue:100},
+    {name:'mix', defaultValue:1, minValue:0, maxValue:1}, {name:'grain', defaultValue:40, minValue:15, maxValue:150} ]; }
+  constructor(){ super(); onKill(this); this.S=32768; this.buf=[new Float32Array(this.S), new Float32Array(this.S)]; this.t=0; this.gr=[{r:0,k:0,L:0},{r:0,k:0,L:0}]; this.started=false; this.lastD=0; }
+  at(b, a){ let r=a%this.S; if(r<0) r+=this.S; const i0=r|0, f=r-i0; let i1=i0+1; if(i1>=this.S) i1-=this.S; return b[i0]*(1-f)+b[i1]*f; }
+  near(b, a){ let r=Math.floor(a+0.5)%this.S; if(r<0) r+=this.S; return b[r]; }
+  // Where should the new head start? Try delays dn..dn+range and keep the one whose past matches the other head's past best.
+  search(other, dn, range, ratio, span){ const b=this.buf[0], t=this.t, step=Math.max(2, Math.floor(span/128)), nj=Math.max(4, Math.floor(span/step)); let best=0, bestS=-1e30;
+    const score=(d)=>{ let c=0, e=0; for(let j=0;j<nj;j++){ const o=j*step, av=this.near(b, other-o), bv=this.near(b, t-d-o); c+=av*bv; e+=bv*bv; } return c/Math.sqrt(e+1e-9); };
+    for(let dd=0; dd<=range; dd+=step){ const s=score(dn+dd); if(s>bestS){ bestS=s; best=dd; } }   // coarse pass
+    const lo=Math.max(0,best-step+1), hi=Math.min(range,best+step-1), bc=best; for(let dd=lo; dd<=hi; dd++){ if(dd===bc) continue; const s=score(dn+dd); if(s>bestS){ bestS=s; best=dd; } }   // fine pass around the winner
+    return dn+best; }
+  process(inputs, outputs, p){
+    if(this.dead) return false; const inp=inputs[0], out=outputs[0]; if(!inp||!inp.length) return true;
+    const n=inp[0].length, S=this.S, sr=sampleRate, mix=p.mix[0];
+    const ratio=Math.pow(2,(p.semitones[0]+p.cents[0]/100)/12), W=Math.max(128, Math.floor(sr*p.grain[0]/1000*0.95/Math.max(1,ratio))), H=W>>1, range=Math.floor(W*0.65), dn=(ratio>1?(ratio-1)*W:0)+4, span=Math.floor(W*Math.max(1,ratio));   // the search compares as much of the past as one grain covers, so a low note fits a whole period in it
+    const g0=this.gr[0], g1=this.gr[1];
+    if(!this.started){ this.started=true; g0.r=this.t-dn; g0.k=0; g0.L=W; g1.r=this.t-dn-(1-ratio)*H; g1.k=H; g1.L=W; }
+    for(let i=0;i<n;i++){
+      for(let c=0;c<2;c++) this.buf[c][this.t%S]=(inp[c]||inp[0])[i];
+      this.t++;
+      if(g0.k>=g0.L){ g0.k=0; g0.L=W; g0.r=this.t-this.search(g1.r, dn, range, ratio, span); }
+      if(g1.k>=g1.L){ g1.k=0; g1.L=W; g1.r=this.t-this.search(g0.r, dn, range, ratio, span); }
+      const w0=0.5-0.5*Math.cos(2*Math.PI*g0.k/g0.L), w1=0.5-0.5*Math.cos(2*Math.PI*g1.k/g1.L);
+      const a0=Math.min(g0.r, this.t-1)-0.5, a1=Math.min(g1.r, this.t-1)-0.5;   // never read past what has been written; the half sample averages two samples so an up shift does not skip every other one
+      for(let c=0;c<out.length;c++){ const b=this.buf[c<2?c:0]; const wet=this.at(b,a0)*w0+this.at(b,a1)*w1; out[c][i]=wet*mix+(inp[c]||inp[0])[i]*(1-mix); }
+      g0.r+=ratio; g1.r+=ratio; g0.k++; g1.k++;
+    }
+    return true; }
+}
+
+registerProcessor('np-delay', DelayProcessor);
+registerProcessor('np-taps', TapsProcessor);
+registerProcessor('np-verb', VerbProcessor);
+registerProcessor('np-oc2', OC2Processor);
+registerProcessor('np-pitch2', Pitch2Processor);
+
 </script>
 <script type="text/worker" id="stretch-worker-src">
 // ===== Neon Peach practice player: time stretch and pitch shift, streamed in chunks =====
@@ -4250,6 +4876,428 @@ def('raspberry', { name:'Melted Raspberry', cat:'Amp', color:'#ff5c8a', desc:'Th
     const cab=p.cab|0; if(cab!==n.cur){ n.cur=cab; n.cv.buffer = cab>0 ? genCabIR(NP.ctx, CAB_NAMES[cab-1]) : null; } }
 });
 
+// ===== Neon Peach 2.4: drives and fuzz, rebuilt as pedal models. Each def() here replaces the block of the same type from engine.js. =====
+// Every block keeps its old knobs, with the same meaning, range and default. New knobs default to the old sound as closely as the model allows.
+// Built from nodes both engines have, plus two new worklets (np-tube, np-fuzz) in worklets_drive.js with C++ twins in native/src/procs_drive.cpp.
+'use strict';
+
+// ---------- shared pieces ----------
+function pdBq(ctx,type,f,q,g){ const n=ctx.createBiquadFilter(); n.type=type; n.frequency.value=f; if(q!=null) n.Q.value=q; if(g!=null) n.gain.value=g; return n; }
+// a curve for np-shaper from a transfer function f. The table runs x = -1..1; g is the gain into f. norm: scale so the loudest point is 1; else clamp to ±1 (when the level matters)
+function pdCurve(f, g, norm){ const N=8192, c=new Float32Array(N); for(let i=0;i<N;i++) c[i]=f(((i/(N-1))*2-1)*g); if(norm){ let mx=0; for(let i=0;i<N;i++) mx=Math.max(mx,Math.abs(c[i])); if(mx>0) for(let i=0;i<N;i++) c[i]/=mx; } else for(let i=0;i<N;i++) c[i]=clampN(c[i],-1,1); return c; }
+// Blend is an equal-power mix of the pedal (lvl) and the clean signal (dry). scale is the block's own trim so defaults sit near the clean level.
+function pdMix(p, scale){ const bl=p.blend/100*Math.PI/2; return { lvl:dB(p.level)*Math.sin(bl)*scale, dry:Math.cos(bl) }; }
+function pdSetGains(n, g, init){ for(const k in g){ if(init) n[k].gain.value=g[k]; else setP(n[k].gain, g[k]); } }
+// what goes into every drive: Grunt (a highpass, how much low end hits the clip) and Attack (a 2.8 kHz shelf into the clip)
+function pdPre(ctx,n,p){ n.hp=pdBq(ctx,'highpass',p.grunt,0.7); n.att=pdBq(ctx,'highshelf',2800,null,p.attack); }
+// what comes out: the 12 Hz DC filter (curves make DC), High Cut, Tone (a 1.8 kHz shelf), Level
+function pdPost(ctx,n,p){ n.dc=pdBq(ctx,'highpass',12,0.5); n.lp=pdBq(ctx,'lowpass',p.highcut,0.6); n.tone=pdBq(ctx,'highshelf',1800,null,p.tone); n.lvl=ctx.createGain(); }
+function pdApplyCommon(b){ const n=b.n,p=b.p; n.hp.frequency.value=p.grunt; n.att.gain.value=p.attack; n.lp.frequency.value=p.highcut; n.tone.gain.value=p.tone; }
+// the clean side of Blend. It waits one shaper's worth per shaper in the drive path (k of them), so the two line up and the lows stay full.
+function pdDry(ctx,b,k){ const n=b.n; n.dry=ctx.createGain(); n.dd=[]; let prev=b.wetIn; for(let i=0;i<k;i++){ const d=shDelay(ctx); n.dd.push(d); prev.connect(d); prev=d; } prev.connect(n.dry).connect(b.wetOut); }
+function pdWorklet(ctx,name,pd){ return new AudioWorkletNode(ctx,name,{outputChannelCount:[2], parameterData:pd}); }
+const PD_K=(...v)=>v.join(',');   // one key from several knob values, for setCurve
+
+// ---------- Microtubes B3K: the Darkglass B3K v2 ----------
+// Grunt and Attack shape what hits the clip. The clip is the head's b3k circuit (two CMOS inverter stages). Its voice after the clip is the head's too.
+def('b3k', { name:'Microtubes B3K', cat:'Drive', color:'#f96', desc:'The Darkglass B3K. Two CMOS stages. Tight, clanky grind with a clean blend.', lat:SHAPER_LAT,
+  params:driveParams(100,3,55,0),
+  note(b){ return 'Grunt sets how much low end hits the drive. Attack pushes 2.8 kHz into it. Blend keeps the clean lows under the grind.'; },
+  build(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.sh=initCurve(shaperNode(ctx, headCurve('b3k',p.drive/100)),'b3k',p.drive); n.v1=ctx.createBiquadFilter(); n.v2=ctx.createBiquadFilter(); headVoice(n.v1,n.v2,'b3k'); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.32),true);
+    b.wetIn.connect(n.hp).connect(n.att).connect(n.sh).connect(n.v1).connect(n.v2).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; pdApplyCommon(b); setCurve(n.sh,'b3k:'+p.drive,()=>headCurve('b3k',p.drive/100)); pdSetGains(n,pdMix(p,0.32)); } });
+
+// ---------- Vintage Microtubes ----------
+// Era morphs the clip from the tight B3K curve (0) to the round, early-compressing Vintage curve (100), and the voice with it: more 500 Hz, less top, and a slow squash before the clip.
+function vintCurve(drive, era){ const a=headCurve('b3k',drive), c=headCurve('vint',drive), e=era/100, N=a.length, o=new Float32Array(N); let mx=0; for(let i=0;i<N;i++){ o[i]=a[i]*(1-e)+c[i]*e; mx=Math.max(mx,Math.abs(o[i])); } if(mx>0) for(let i=0;i<N;i++) o[i]/=mx; return o; }
+def('vintage', { name:'Vintage Microtubes', cat:'Drive', color:'#f96', desc:'Warm, round tube-style drive that squashes early. Era goes from modern to vintage.', lat:SHAPER_LAT,
+  params:Object.assign(driveParams(80,0,45,-2),{ era:P('Era',0,100,50,'%') }),
+  note(b){ return b.p.era<34 ? 'Era is modern: tight and bright, close to a B3K.' : b.p.era>66 ? 'Era is vintage: dark, round, and it squashes early.' : 'Era is in the middle: warm but still clear.'; },
+  build(ctx,b){ const n=b.n,p=b.p, e=p.era/100; pdPre(ctx,n,p); n.sq=compNode(ctx); n.sq.parameters.get('attack').value=8; n.sq.parameters.get('release').value=180; n.sq.parameters.get('knee').value=8; n.sq.parameters.get('threshold').value=-18-e*10; n.sq.parameters.get('ratio').value=1+e*2; n.sq.parameters.get('makeup').value=e*3;
+    n.sh=initCurve(shaperNode(ctx, vintCurve(p.drive/100,p.era)),'vint',PD_K(p.drive,p.era)); n.v1=pdBq(ctx,'peaking',500,0.9,2.5*e); n.v2=pdBq(ctx,'peaking',2000,1,2*(1-e)); n.v3=pdBq(ctx,'lowpass',7000*Math.pow(3800/7000,e),0.7); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.4),true);
+    b.wetIn.connect(n.hp).connect(n.att).connect(n.sq).connect(n.sh).connect(n.v1).connect(n.v2).connect(n.v3).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p, e=p.era/100; pdApplyCommon(b); wp(n.sq,'threshold',-18-e*10); wp(n.sq,'ratio',1+e*2); wp(n.sq,'makeup',e*3); setCurve(n.sh,'vint:'+PD_K(p.drive,p.era),()=>vintCurve(p.drive/100,p.era)); n.v1.gain.value=2.5*e; n.v2.gain.value=2*(1-e); n.v3.frequency.value=7000*Math.pow(3800/7000,e); pdSetGains(n,pdMix(p,0.4)); } });
+
+// ---------- Alpha·Omega: Alpha Crunch and Omega Growl are the two sides of the same pedal ----------
+// Mod blends the Alpha clip (hard knee, stays clean to the edge) into the Omega clip (saturates early, leans to one side). Bite and Growl push 2.8 kHz and 280 Hz into the clip. Both circuits and voices are the head's.
+const aoParams=(g,a,d,t,mod)=>Object.assign(driveParams(g,a,d,t),{ mod:P('Mod',0,100,mod,'%'), bite:P('Bite',0,100,0,'%'), growl:P('Growl',0,100,0,'%') });
+function aoGains(p){ const m=pdMix(p,0.32), md=p.mod/100*Math.PI/2; m.gA=Math.cos(md); m.gB=Math.sin(md); return m; }
+function aoNote(b){ return 'Mod blends Alpha (0, tight and punchy) into Omega (100, raw and fuzzy). Bite pushes highs into the drive. Growl pushes low mids in.'; }
+function aoBuild(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.growl=pdBq(ctx,'peaking',280,1,p.growl/100*9); n.bite=pdBq(ctx,'peaking',2800,1.3,p.bite/100*10);
+  n.shA=initCurve(shaperNode(ctx, headCurve('alpha',p.drive/100)),'alpha',p.drive); n.shB=initCurve(shaperNode(ctx, headCurve('omega',p.drive/100)),'omega',p.drive); n.gA=ctx.createGain(); n.gB=ctx.createGain();
+  n.vA1=ctx.createBiquadFilter(); n.vA2=ctx.createBiquadFilter(); n.vB1=ctx.createBiquadFilter(); n.vB2=ctx.createBiquadFilter(); headVoice(n.vA1,n.vA2,'alpha'); headVoice(n.vB1,n.vB2,'omega'); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,aoGains(p),true);
+  b.wetIn.connect(n.hp).connect(n.growl).connect(n.att).connect(n.bite); n.bite.connect(n.shA).connect(n.vA1).connect(n.vA2).connect(n.gA).connect(n.dc); n.bite.connect(n.shB).connect(n.vB1).connect(n.vB2).connect(n.gB).connect(n.dc); n.dc.connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); }
+function aoApply(b){ const n=b.n,p=b.p; pdApplyCommon(b); n.growl.gain.value=p.growl/100*9; n.bite.gain.value=p.bite/100*10; setCurve(n.shA,'alpha:'+p.drive,()=>headCurve('alpha',p.drive/100)); setCurve(n.shB,'omega:'+p.drive,()=>headCurve('omega',p.drive/100)); pdSetGains(n,aoGains(p)); }
+def('alpha', { name:'Alpha Crunch', cat:'Drive', color:'#f96', desc:'The Alpha side of the Alpha·Omega. Tight, punchy, modern crunch. Mod blends in Omega.', lat:SHAPER_LAT, params:aoParams(120,4,60,2,0), note:aoNote, build:aoBuild, apply:aoApply });
+def('omega', { name:'Omega Growl', cat:'Drive', color:'#f96', desc:'The Omega side of the Alpha·Omega. Big, raw, growling distortion. Mod blends in Alpha.', lat:SHAPER_LAT, params:aoParams(90,2,65,-3,100), note:aoNote, build:aoBuild, apply:aoApply });
+
+// ---------- Ignissor Fuzz: a germanium Fuzz Face (np-fuzz) ----------
+def('ignis', { name:'Ignissor Fuzz', cat:'Drive', color:'#f96', desc:'A germanium Fuzz Face. Cleans up when you play softer. Bias sets how it breaks up.', lat:SHAPER_LAT,
+  params:Object.assign(driveParams(70,0,70,0),{ bias:P('Bias',0,100,50,'%'), gate:P('Gate',0,100,0,'%') }),
+  note(b){ const p=b.p; return (p.bias<35 ? 'Bias is starved: spitty, with a decay that breaks up.' : p.bias>65 ? 'Bias is hot: smooth and thick.' : 'Bias is in the middle: the classic sound.')+(p.gate>0 ? ' Gate chops the tail as a note dies out.' : ' Play softer and it cleans up.'); },
+  build(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.fz=pdWorklet(ctx,'np-fuzz',{fuzz:p.drive/100, bias:p.bias/100, gate:p.gate/100}); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.35),true);
+    b.wetIn.connect(n.hp).connect(n.att).connect(n.fz).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; pdApplyCommon(b); wp(n.fz,'fuzz',p.drive/100); wp(n.fz,'bias',p.bias/100); wp(n.fz,'gate',p.gate/100); pdSetGains(n,pdMix(p,0.35)); } });
+
+// ---------- Peach Overdrive: a Tube Screamer ----------
+// The op-amp stage adds a clipped copy of the highs (above 720 Hz, the 4.7k/47n leg) to the untouched signal: out = in + clip(gain * highs). That is where the mid hump comes from, and it grows with Drive.
+// The diodes sit in the feedback loop, so the clip is soft and symmetric. Clip picks the diodes: threshold and knee. A 51 pF cap across the feedback rolls the highs off harder as Drive goes up.
+const OD_CLIP=[{Tp:0.55,Tn:0.55,k:3},{Tp:0.3,Tn:0.3,k:2},{Tp:1.6,Tn:1.6,k:5},{Tp:0.55,Tn:1.1,k:3}];   // Silicon, Germanium (lower, softer), LED (higher, harder), Asymmetric (two diodes one way)
+function odGain(d){ return 3+Math.pow(d,1.5)*110; }   // Rf/4.7k. The real pot starts at 51k (gain 11); this starts a little lower so Drive has a near-clean end on a hot bass
+function odLP(d){ return Math.min(20000, 1/(2*Math.PI*(51e3+500e3*d)*51e-12)); }
+function odCurve(drive, clip){ const m=OD_CLIP[clip|0]||OD_CLIP[0]; return pdCurve(u=>{ const T=u>=0?m.Tp:m.Tn; return u/Math.pow(1+Math.pow(Math.abs(u)/T,m.k),1/m.k)/2; }, odGain(drive), false); }   // /2 keeps the LED curve inside the table; n.cs gives it back
+def('od', { name:'Peach Overdrive', cat:'Drive', color:'#f96', desc:'A Tube Screamer. Diodes in the feedback loop, the 720 Hz mid hump, the active tone. Pick your diodes.', lat:SHAPER_LAT,
+  params:Object.assign(driveParams(60,1,40,0),{ clip:E('Clip',['Silicon','Germanium','LED','Asymmetric'],0) }),
+  note(b){ return ['Silicon: the classic. Smooth and even.','Germanium: clips sooner and softer. Warmer, quieter.','LED: clips later and harder. Louder, more open.','Asymmetric: one side clips sooner. Adds even harmonics, a little tube-like.'][b.p.clip|0]+' The mid hump grows with Drive.'; },
+  build(ctx,b){ const n=b.n,p=b.p, d=p.drive/100; pdPre(ctx,n,p); n.h7=pdBq(ctx,'highpass',500,-6); /* the 4.7k/47n leg: close to a first-order 720 Hz highpass */ n.fb=pdBq(ctx,'lowpass',odLP(d),-3); n.sh=initCurve(shaperNode(ctx, odCurve(d,p.clip)),'od',PD_K(p.drive,p.clip)); n.cs=ctx.createGain(); n.cs.gain.value=2; n.cd=shDelay(ctx); n.sum=ctx.createGain();
+    pdPost(ctx,n,p); n.tone.frequency.value=1000; n.tone.gain.value=p.tone/2; n.t1=pdBq(ctx,'lowshelf',1000,null,-p.tone/2); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.45),true);
+    b.wetIn.connect(n.hp).connect(n.att); n.att.connect(n.h7).connect(n.fb).connect(n.sh).connect(n.cs).connect(n.sum); n.att.connect(n.cd).connect(n.sum); n.sum.connect(n.dc).connect(n.t1).connect(n.tone).connect(n.lp).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p, d=p.drive/100; pdApplyCommon(b); n.tone.gain.value=p.tone/2; n.t1.gain.value=-p.tone/2; n.fb.frequency.value=odLP(d); setCurve(n.sh,'od:'+PD_K(p.drive,p.clip),()=>odCurve(d,p.clip)); pdSetGains(n,pdMix(p,0.45)); } });
+
+// ---------- Wavefolder: a Buchla-style folder ----------
+// Past the edge the wave folds back on itself instead of flattening. Folds is how many times a loud note folds, Drive is how hard it hits, Symmetry offsets the wave so even harmonics appear (full turn: an octave-like rectifier), Shape goes from sharp corners (triangle) to a smooth sine fold.
+function foldTri(u){ u=(u+1)%4; if(u<0) u+=4; return u<2 ? u-1 : 3-u; }
+function foldCurve(drive, folds, sym, shape){ const g=1+Math.pow(drive,1.2)*4*folds, o=sym/100, s=shape/100; return pdCurve(x=>{ const v=x+o; return foldTri(v)*(1-s)+Math.sin(Math.PI*v/2)*s; }, g, false); }
+def('fold', { name:'Wavefolder', cat:'Drive', color:'#f96', desc:'A Buchla-style wavefolder. Wild, synth-like harmonics that bloom as you dig in.', lat:SHAPER_LAT,
+  params:Object.assign(driveParams(50,0,30,0),{ folds:P('Folds',1,6,4,'',1), symmetry:P('Symmetry',-100,100,0,'%'), shape:P('Shape',0,100,20,'%') }),
+  note(b){ return 'Drive is how hard the wave hits the folder. Folds is how many times a loud note folds. Symmetry adds even harmonics. Shape softens the corners.'; },
+  build(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.sh=initCurve(shaperNode(ctx, foldCurve(p.drive/100,p.folds,p.symmetry,p.shape)),'fold',PD_K(p.drive,p.folds,p.symmetry,p.shape)); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.5),true);
+    b.wetIn.connect(n.hp).connect(n.att).connect(n.sh).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; pdApplyCommon(b); setCurve(n.sh,'fold:'+PD_K(p.drive,p.folds,p.symmetry,p.shape),()=>foldCurve(p.drive/100,p.folds,p.symmetry,p.shape)); pdSetGains(n,pdMix(p,0.5)); } });
+
+// ---------- Tube Preamp: one 12AX7 stage (np-tube) ----------
+def('tubepre', { name:'Tube Preamp', cat:'Drive', color:'#f96', desc:'A 12AX7 triode stage. Grid clamp on top, soft cutoff below, and a bias that blooms and ducks as you play.', lat:SHAPER_LAT,
+  params:Object.assign(driveParams(40,0,25,0),{ bias:P('Bias',0,100,50,'%'), sag:P('Sag',0,100,30,'%') }),
+  note(b){ const p=b.p; return (p.bias<35 ? 'Bias is cold: the bottom of the wave cuts off first. Crunchy and asymmetric.' : p.bias>65 ? 'Bias is hot: the top clamps first. Smoother, with more even harmonics.' : 'Bias is in the middle: a balanced stage.')+(p.sag>0 ? ' Sag holds hard playing back a little and lets go slowly.' : ''); },
+  build(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.tb=pdWorklet(ctx,'np-tube',{drive:p.drive/100, bias:p.bias/100, sag:p.sag/100}); pdPost(ctx,n,p); pdDry(ctx,b,1); pdSetGains(n,pdMix(p,0.7),true);
+    b.wetIn.connect(n.hp).connect(n.att).connect(n.tb).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; pdApplyCommon(b); wp(n.tb,'drive',p.drive/100); wp(n.tb,'bias',p.bias/100); wp(n.tb,'sag',p.sag/100); pdSetGains(n,pdMix(p,0.7)); } });
+
+// ---------- Peach Muff: the Big Muff / Deluxe Bass Big Muff ----------
+// Two diode clipping stages, both fixed. Sustain is the volume into the first one, like the real pot: at zero the first stage is nearly clean and the second does the work; at full both are slammed.
+// Each stage rolls the highs off before it clips (the 470p feedback caps), so it stays smooth, and a coupling cap sits between them.
+// The tone knob crossfades a lowpass against a highpass, which scoops the mids in the middle; a little of the other side always leaks through, like the real pot. Mids puts them back. Gate starves the input so decays sputter and chop.
+function muffStage(){ return pdCurve(u=>u/Math.pow(1+Math.pow(Math.abs(u)/0.6,2.5),0.4), 8, true); }   // a silicon diode pair across a transistor stage: clean gain 13, then the diodes hold it
+function muffSus(s){ return 0.02+Math.pow(s,1.3)*2.5; }
+function muffGains(p){ const m=pdMix(p,0.55), t=p.tone/100; m.gl=0.08+0.92*(1-t); m.gh=(0.08+0.92*t)*1.3; m.sg=muffSus(p.sustain/100); return m; }
+function muffGate(p){ return { threshold:-90+p.gate*0.72, attack:0.3, release:20, hold:3, range:-80 }; }
+def('muff', { name:'Peach Muff', cat:'Drive', color:'#f96', desc:'A Big Muff fuzz for bass. Two clipping stages, the scooped tone knob, a mids knob to put them back, and a sputtery gate.', lat:2*SHAPER_LAT,
+  params:{ sustain:P('Sustain',0,100,70,'%'), tone:P('Tone',0,100,50,'%'), mids:P('Mids',-12,12,0,'dB'), blend:P('Blend',0,100,70,'%'), level:P('Level',-24,24,0,'dB'), grunt:P('Grunt',30,300,60,'Hz'), gate:P('Gate',0,100,0,'%') },
+  note(b){ return 'Tone goes dark to bright and scoops the mids in the middle. Mids puts them back.'+(b.p.gate>50 ? ' Gate is high: the tail of each note sputters and chops.' : b.p.gate>0 ? ' Gate cuts the tail of each note short.' : ''); },
+  build(ctx,b){ const n=b.n,p=b.p; n.hp=pdBq(ctx,'highpass',p.grunt,0.7); n.gt=pdWorklet(ctx,'np-gate',muffGate(p)); n.sg=ctx.createGain(); n.lp1=pdBq(ctx,'lowpass',3000,-3); n.sh1=initCurve(shaperNode(ctx, muffStage()),'muff',0); n.dc1=pdBq(ctx,'highpass',12,0.5); n.cp=pdBq(ctx,'highpass',60,0.5); n.lp2=pdBq(ctx,'lowpass',2500,-3); n.sh2=initCurve(shaperNode(ctx, muffStage()),'muff',0); n.dc=pdBq(ctx,'highpass',12,0.5);
+    n.tl=pdBq(ctx,'lowpass',450,-4); n.th=pdBq(ctx,'highpass',1500,-4); n.gl=ctx.createGain(); n.gh=ctx.createGain(); n.md=pdBq(ctx,'peaking',800,0.7,p.mids); n.lvl=ctx.createGain(); pdDry(ctx,b,2); pdSetGains(n,muffGains(p),true);
+    b.wetIn.connect(n.hp).connect(n.gt).connect(n.sg).connect(n.lp1).connect(n.sh1).connect(n.dc1).connect(n.cp).connect(n.lp2).connect(n.sh2).connect(n.dc); n.dc.connect(n.tl).connect(n.gl).connect(n.md); n.dc.connect(n.th).connect(n.gh).connect(n.md); n.md.connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p, g=muffGate(p); n.hp.frequency.value=p.grunt; for(const k in g) wp(n.gt,k,g[k]); n.md.gain.value=p.mids; pdSetGains(n,muffGains(p)); } });
+
+// ---------- Octave Fuzz: an Octavia / Green Ringer ----------
+// The octave comes from full-wave rectifying the note: every half cycle flips up, so the pitch doubles. It only comes out clean when the note is mostly its fundamental, so a lowpass picks that band first, and the clean octave needs a note played high up and alone.
+// Octave sets how much rectified signal versus straight signal feeds the fuzz stage after it.
+function ofzGains(p){ const m=pdMix(p,0.4), o=p.octave/100; m.go=o*1.6; m.gd=1-o*0.8; return m; }   // the two halves of a real rectifier never match, so some of the note always gets through
+function rectCurve(){ return pdCurve(x=>Math.sqrt(x*x+0.0025)-0.05, 1, true); }   // a soft full-wave rectifier (germanium diodes)
+function ofzCurve(drive){ return pdCurve(x=>Math.tanh(1.3*(x+0.1))-Math.tanh(0.13), 2+Math.pow(drive,1.5)*40, true); }   // a silicon transistor fuzz stage, leaning a little to one side
+def('octfuzz', { name:'Octave Fuzz', cat:'Drive', color:'#f96', desc:'An Octavia. Rectified fuzz with a ringing octave up. Play high on the neck, one note at a time.', lat:2*SHAPER_LAT,
+  params:Object.assign(driveParams(150,3,70,2),{ octave:P('Octave',0,100,60,'%') }),
+  note(b){ return 'Octave is how much octave versus plain fuzz. The octave rings clearest above the 12th fret, one note at a time. Grunt trims the lows that muddy it.'; },
+  build(ctx,b){ const n=b.n,p=b.p; pdPre(ctx,n,p); n.ob=pdBq(ctx,'lowpass',900,-3); n.rect=initCurve(shaperNode(ctx, rectCurve()),'rect',0); n.rdc=pdBq(ctx,'highpass',12,0.5); n.go=ctx.createGain(); n.od=shDelay(ctx); n.gd=ctx.createGain(); n.sum=ctx.createGain(); n.fz=initCurve(shaperNode(ctx, ofzCurve(p.drive/100)),'ofz',p.drive); pdPost(ctx,n,p); pdDry(ctx,b,2); pdSetGains(n,ofzGains(p),true);
+    b.wetIn.connect(n.hp).connect(n.att); n.att.connect(n.ob).connect(n.rect).connect(n.rdc).connect(n.go).connect(n.sum); n.att.connect(n.od).connect(n.gd).connect(n.sum); n.sum.connect(n.fz).connect(n.dc).connect(n.lp).connect(n.tone).connect(n.lvl).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p; pdApplyCommon(b); setCurve(n.fz,'ofz:'+p.drive,()=>ofzCurve(p.drive/100)); pdSetGains(n,ofzGains(p)); } });
+
+// ===== Neon Peach 2.4: dynamics and filters, rebuilt as pedal models. Each def() here replaces the block of the same type from engine.js. =====
+// The sound lives in app/worklets_dyn.js (and its C++ twin native/src/procs_dyn.cpp). None of these blocks adds any delay.
+'use strict';
+// set every worklet knob at once: dynInit when the block is made (no ramp, so there is no wrong first moment), dynSet when a knob moves
+function dynInit(node, m){ for(const k in m) node.parameters.get(k).value=m[k]; }
+function dynSet(node, m){ for(const k in m) wp(node, k, m[k]); }
+
+// --- Super Squeeze: four compressor circuits in one box ---
+const COMP_TYPES=['OTA','Opto','FET','VCA'];
+const COMP_NOTE=[ 'OTA: the Dyna Comp circuit. Squashy, with that long sustain. Push the threshold down and it pumps.', 'Opto: a photocell, like an LA-2A. Slow and soft. The longer it squashes, the slower it lets go.', 'FET: the 1176. Very fast. Attack runs ten times faster than the knob says. Bites when pushed.', 'VCA: clean and even. The attack and release do exactly what the knobs say.' ];
+function compMap(p){ return { threshold:p.thr, ratio:p.ratio, attack:p.attack, release:p.release, knee:p.knee, makeup:p.makeup, mix:p.blend/100, schpf:p.schpf, rms:p.detect|0, auto:1, type:p.type|0 }; }
+def('comp', { name:'Super Squeeze', cat:'Dynamics', color:'#8ef', desc:'Four compressor circuits: OTA squash, Opto glow, FET snap, or clean VCA. Blend keeps the attack.', gr:true,
+  params:{ type:E('Circuit',COMP_TYPES,3), thr:P('Threshold',-60,0,-22,'dB'), ratio:P('Ratio',1,20,4,':1'), attack:P('Attack',0.1,100,8,'ms'), release:P('Release',10,1000,120,'ms'), knee:P('Knee',0,30,8,'dB'), makeup:P('Makeup',0,24,4,'dB'), blend:P('Blend',0,100,100,'%'), schpf:P('Ignore Lows',20,500,80,'Hz'), detect:E('Detect',['Peak','RMS'],0) },
+  note(b){ return COMP_NOTE[b.p.type|0]||''; },
+  build(ctx,b){ const n=b.n; n.c=new AudioWorkletNode(ctx,'np-pcomp',{outputChannelCount:[2]}); dynInit(n.c, compMap(b.p)); n.c.port.onmessage=e=>{ b.gr=e.data.gr; }; b.wetIn.connect(n.c).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.c, compMap(b.p)); }
+});
+
+// --- Peach Gate: an NS-2 style gate ---
+function gateMap(p){ return { threshold:p.thr, attack:p.attack, release:p.release, hold:p.hold, range:p.range, hyst:p.hyst, decay:p.decay }; }
+def('gate', { name:'Peach Gate', cat:'Dynamics', color:'#8ef', desc:'Cuts hiss and hum when you stop playing. Opens fast, closes clean, never chatters.',
+  params:{ thr:P('Threshold',-90,0,-55,'dB'), attack:P('Attack',0.1,100,1,'ms'), release:P('Release',5,2000,120,'ms'), hold:P('Hold',0,1000,40,'ms'), range:P('Range',-90,0,-80,'dB'), hyst:P('Close Below',0,20,6,'dB'), decay:P('Decay',0,100,0,'%') },
+  note(b){ return 'The gate opens at Threshold and closes once the sound drops Close Below under it. Decay at 0 shuts it hard. Turn Decay up and the gate follows the note down instead, so tails fade out.'; },
+  build(ctx,b){ const n=b.n; n.g=new AudioWorkletNode(ctx,'np-pgate',{outputChannelCount:[2]}); dynInit(n.g, gateMap(b.p)); b.wetIn.connect(n.g).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.g, gateMap(b.p)); }
+});
+
+// --- Brickwall: a limiter with no look-ahead ---
+function limMap(p){ return { input:p.gain, ceiling:p.ceil, release:p.release, type:p.type|0 }; }
+def('limiter', { name:'Brickwall', cat:'Dynamics', color:'#8ef', desc:'A hard ceiling. Nothing gets louder than this. No delay.', gr:true,
+  params:{ type:E('Knee',['Hard','Soft'],0), ceil:P('Ceiling',-20,0,-1,'dB'), release:P('Release',10,500,60,'ms'), gain:P('Input',0,24,0,'dB') },
+  note(b){ return b.p.type ? 'Soft eases in from 3 dB under the ceiling, and lets go slower after a long squash.' : 'Hard only acts above the ceiling. Fast and plain.'; },
+  build(ctx,b){ const n=b.n; n.l=new AudioWorkletNode(ctx,'np-plimit',{outputChannelCount:[2]}); dynInit(n.l, limMap(b.p)); n.l.port.onmessage=e=>{ b.gr=e.data.gr; }; b.wetIn.connect(n.l).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.l, limMap(b.p)); }
+});
+
+// --- Envelope Filter: Mutron III / Q-Tron style ---
+function envfMap(p){ return { sens:p.sens/100, fmin:p.fmin, range:p.range/100, q:p.q, attack:p.attack, decay:p.decay, type:p.type|0, dir:p.dir|0, mix:p.mix/100, gain:p.gain }; }
+def('envf', { name:'Envelope Filter', cat:'Filter', color:'#9ff', desc:'Funky auto-wah that follows your picking. Mutron-style, with real resonance.',
+  params:{ sens:P('Sensitivity',0,100,50,'%'), fmin:P('Start Freq',40,2000,120,'Hz'), range:P('Range',0,100,70,'%'), q:P('Reso',0.5,20,4,''), attack:P('Attack',1,200,8,'ms'), decay:P('Decay',10,1500,180,'ms'), type:E('Type',['Low Pass','Band Pass','High Pass'],0), dir:E('Direction',['Up','Down'],0), mix:P('Mix',0,100,100,'%'), gain:P('Gain',0,100,0,'%') },
+  note(b){ return (b.p.q>=18 ? 'Reso this high rings on its own. ' : '')+'Gain drives the filter input into gentle saturation. Mix brings back the clean bass.'; },
+  build(ctx,b){ const n=b.n; n.e=new AudioWorkletNode(ctx,'np-penvf',{outputChannelCount:[2]}); dynInit(n.e, envfMap(b.p)); b.wetIn.connect(n.e).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.e, envfMap(b.p)); }
+});
+
+// --- Pedal Wah: Cry Baby, Bass 105Q, Vox ---
+function wahMap(p){ return { pos:p.pos/100, q:p.q, fmin:p.fmin, fmax:p.fmax, mix:p.mix/100, model:p.model|0 }; }
+def('wah', { name:'Pedal Wah', cat:'Filter', color:'#9ff', desc:'A wah you sweep with the expression pedal. Cry Baby, a fat bass 105Q, or a bright Vox.',
+  params:{ model:E('Model',['Cry Baby','Bass 105Q','Vox'],0), pos:P('Position',0,100,50,'%'), q:P('Reso',0.5,15,5,''), fmin:P('Min Freq',100,1000,350,'Hz'), fmax:P('Max Freq',800,5000,2200,'Hz'), mix:P('Mix',0,100,100,'%') },
+  note(b){ return ['Cry Baby: the classic peak with the lows thinned out.','Bass 105Q: sweeps lower and keeps your low end under the peak.','Vox: brighter and narrower, with more top above the peak.'][b.p.model|0]+' Link Position to the expression pedal.'; },
+  build(ctx,b){ const n=b.n; n.w=new AudioWorkletNode(ctx,'np-wah',{outputChannelCount:[2]}); dynInit(n.w, wahMap(b.p)); b.wetIn.connect(n.w).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.w, wahMap(b.p)); }
+});
+
+// --- Multi Filter: a clean 2-pole, or a Moog-style ladder ---
+function filtMap(p){ return { type:p.type|0, freq:p.freq, q:p.q, mix:p.mix/100, model:p.model|0, drive:p.drive }; }
+def('filter', { name:'Multi Filter', cat:'Filter', color:'#9ff', desc:'Low pass, high pass, band pass or notch. Clean, or a Moog-style ladder that growls and sings.',
+  params:{ model:E('Model',['SVF','Ladder'],0), type:E('Type',['Low Pass','High Pass','Band Pass','Notch'],0), freq:P('Freq',40,12000,800,'Hz'), q:P('Reso',0.3,20,1,''), mix:P('Mix',0,100,100,'%'), drive:P('Drive',0,100,0,'%') },
+  note(b){ return b.p.model ? 'Ladder: four stages with soft clipping in each, like a Moog. Reso near the top makes it sing on its own.' : 'SVF: a clean 2-pole filter. Drive adds a little saturation before it.'; },
+  build(ctx,b){ const n=b.n; n.f=new AudioWorkletNode(ctx,'np-ladder',{outputChannelCount:[2]}); dynInit(n.f, filtMap(b.p)); b.wetIn.connect(n.f).connect(b.wetOut); },
+  apply(b){ dynSet(b.n.f, filtMap(b.p)); }
+});
+
+// ===== Neon Peach 2.4: modulation, rebuilt as pedal models. Each def() here replaces the block of the same type from engine.js. =====
+// Chorus, tremolo, vibrato, rotary and ring mod are plain node graphs (delay, biquad, oscillator, gain, panner, wave shaper), so both engines
+// play them the same with no C++. Flanger, phaser and bit crusher are worklets (worklets_mod.js) with C++ twins (procs_mod.cpp): the first two
+// need one-sample feedback, which a node loop cannot give.
+'use strict';
+
+// A gentle soft clip for the LFO-free parts of a BBD line: x -> tanh(k x)/k. Small signals pass as they are, loud ones round off.
+function bbdCurve(k){ const N=8192, c=new Float32Array(N); for(let i=0;i<N;i++){ const x=(i/(N-1))*2-1; c[i]=Math.tanh(k*x)/k; } return c; }
+// A curve that turns an LFO (-1..1) into a 0..1 control: c = 1 - ((1-l)/2)^pw. pw 1 is a plain crossfade, higher stays near the top longer and dips quicker.
+function lfoCurve(pw){ const N=8192, c=new Float32Array(N); for(let i=0;i<N;i++){ const x=(i/(N-1))*2-1; c[i]=1-Math.pow(Math.max(0,(1-x)/2), pw); } return c; }
+// Re-send a shaper curve only when its key changes (curves are 8192 floats; do not send them on every knob move).
+function keyCurve(node, key, make){ if(node._ck===key) return; node._ck=key; node.curve=make(); }
+// The BBD lowpass: a longer delay means a slower clock, which means a darker line. 5 ms is about 9 kHz, 20 ms is under 2.5 kHz.
+function bbdLP(ms, tone){ return Math.min(tone, 46000/ms); }
+
+// ---------- Peach Chorus: bucket-brigade chorus in three flavours ----------
+// Each line: in -> soft clip -> BBD lowpass -> delay (swept by its own triangle LFO) -> level -> pan. Lines: [delay ms, swing ms at full depth, pan, LFO sign, rate multiplier, level]
+const CHORUS_MODELS=[
+  { name:'CE-2', sat:1.6, lines:[[5.5,3.5,0,1,1,1.4]], extra:[8.5,2.5,0,-1,1,1.1] },                                   // one dark BBD, mono. Voices 3 adds a second line swept the other way.
+  { name:'Dimension D', sat:1.0, lines:[[9,2.5,-0.75,1,1,1],[14,2.5,0.75,-1,1,1]], extra:[21,2,0,1,0.73,0.8] },          // two lines in opposite phase, left and right: wide, no obvious wobble
+  { name:'Tri-Chorus', sat:1.0, lines:[[7,3.5,-0.9,1,1,1],[12,3,0.9,-1,1.37,1],[18,2.5,0,1,0.73,1]], extra:null } ];   // three lines at three rates, always on
+function chorusLines(p){ const m=CHORUS_MODELS[p.model|0]||CHORUS_MODELS[1]; const L=m.lines.slice(); if(m.extra && p.voices) L.push(m.extra); while(L.length<3) L.push(null); return L; }
+// Every gain in the chorus from the settings. Wet lines are scaled so the loudest channel's wet adds up to the mix amount.
+function chorusGains(p){ const L=chorusLines(p), mix=p.mix/100; let sL=0, sR=0; L.forEach(l=>{ if(!l) return; const x=(l[2]+1)/2; sL+=l[5]*Math.cos(x*Math.PI/2); sR+=l[5]*Math.sin(x*Math.PI/2); }); const norm=1/Math.max(0.5,sL,sR);
+  return { dry:1-0.5*mix, lv:L.map(l=>l?l[5]*norm*mix*0.8:0), sw:L.map(l=>l?l[3]*l[1]/1000*p.depth/100:0) }; }
+def('chorus', { name:'Peach Chorus', cat:'Mod', color:'#9cf', desc:'Bucket-brigade chorus. CE-2 warmth, Dimension D width, or a three-line Tri-Chorus.',
+  params:{ rate:P('Rate',0.05,10,0.8,'Hz'), depth:P('Depth',0,100,40,'%'), mix:P('Mix',0,100,50,'%'), tone:P('Tone',500,12000,6000,'Hz'), voices:E('Voices',['2','3'],0), model:E('Model',['CE-2','Dimension D','Tri-Chorus'],1) },
+  note(b){ const m=b.p.model|0; return m===0 ? 'One dark BBD line, like the pedal. Voices 3 adds a second line swept the other way. Mix 50 is the real pedal.' : m===1 ? 'Two lines move in opposite directions, left and right. Wide, with no obvious wobble. Voices 3 adds a slow middle line.' : 'Three lines at three speeds. Always three; the Voices switch does nothing here.'; },
+  build(ctx,b){ const n=b.n, p=b.p, g=chorusGains(p), L=chorusLines(p), m=CHORUS_MODELS[p.model|0]||CHORUS_MODELS[1];
+    n.sat=ctx.createWaveShaper(); keyCurve(n.sat,'k'+m.sat,()=>bbdCurve(m.sat)); n.dry=ctx.createGain(); n.dry.gain.value=g.dry; n.wet=ctx.createGain();
+    n.lfo=[]; n.lg=[]; n.lp=[]; n.d=[]; n.lv=[]; n.pan=[];
+    for(let i=0;i<3;i++){ const l=L[i]; const o=mkLFO(ctx,'triangle'); o.frequency.value=p.rate*(l?l[4]:1); const lg=ctx.createGain(); lg.gain.value=g.sw[i]; const lp=ctx.createBiquadFilter(); lp.type='lowpass'; lp.Q.value=0.7; lp.frequency.value=l?bbdLP(l[0],p.tone):p.tone;
+      const d=ctx.createDelay(0.06); d.delayTime.value=l?l[0]/1000:0.01; const lv=ctx.createGain(); lv.gain.value=g.lv[i]; const pan=ctx.createStereoPanner(); pan.pan.value=l?l[2]:0;
+      o.connect(lg).connect(d.delayTime); n.sat.connect(lp).connect(d).connect(lv).connect(pan).connect(n.wet); n.lfo.push(o); n.lg.push(lg); n.lp.push(lp); n.d.push(d); n.lv.push(lv); n.pan.push(pan); }
+    b.wetIn.connect(n.sat); n.wet.connect(b.wetOut); b.wetIn.connect(n.dry).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p, g=chorusGains(p), L=chorusLines(p), m=CHORUS_MODELS[p.model|0]||CHORUS_MODELS[1]; keyCurve(n.sat,'k'+m.sat,()=>bbdCurve(m.sat)); setP(n.dry.gain,g.dry);
+    for(let i=0;i<3;i++){ const l=L[i]; n.lfo[i].frequency.value=p.rate*(l?l[4]:1); n.lg[i].gain.value=g.sw[i]; n.lp[i].frequency.value=l?bbdLP(l[0],p.tone):p.tone; setP(n.d[i].delayTime,l?l[0]/1000:0.01,0.05); setP(n.lv[i].gain,g.lv[i]); n.pan[i].pan.value=l?l[2]:0; } }
+});
+
+// ---------- Flanger: Electric Mistress / ADA / through-zero BBD flanger (worklet np-flanger) ----------
+def('flanger', { name:'Flanger', cat:'Mod', color:'#9cf', desc:'BBD flanger. Electric Mistress, ADA, or a through-zero jet.',
+  params:{ rate:P('Rate',0.05,5,0.3,'Hz'), depth:P('Depth',0,100,60,'%'), fb:P('Feedback',-95,95,50,'%'), manual:P('Manual',0.5,8,2,'ms'), mix:P('Mix',0,100,50,'%'), model:E('Model',['Mistress','ADA','Through-Zero'],1), polarity:E('Polarity',['Positive','Negative'],0) },
+  lat(b){ return (b.p.model|0)===2 ? Math.round(b.p.manual*NP.ctx.sampleRate/1000) : 0; },   // through-zero holds the dry side back by Manual ms
+  note(b){ const m=b.p.model|0; return m===0 ? 'Slow, lush and dark. Feedback is held under 80%. Negative polarity thins it out.' : m===1 ? 'Deep sweep, bright, feedback up to 95% for the metallic peak. Polarity is the ADA Even/Odd switch.' : 'The dry side waits Manual ms and the wet side sweeps across it. Set Negative polarity for the full jet cancel at the crossing.'; },
+  build(ctx,b){ const n=b.n, p=b.p; n.f=new AudioWorkletNode(ctx,'np-flanger',{outputChannelCount:[2], parameterData:{rate:p.rate, depth:p.depth/100, fb:p.fb/100, manual:p.manual, mix:p.mix/100, model:p.model|0, polarity:p.polarity|0}}); b.wetIn.connect(n.f).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p; wp(n.f,'rate',p.rate); wp(n.f,'depth',p.depth/100); wp(n.f,'fb',p.fb/100); wp(n.f,'manual',p.manual); wp(n.f,'mix',p.mix/100); n.f.parameters.get('model').value=p.model|0; n.f.parameters.get('polarity').value=p.polarity|0; }
+});
+
+// ---------- Phaser: Phase 90 / Small Stone / Univibe (worklet np-phaser) ----------
+// The stages sweep in octaves around Center, so the sweep sounds even from top to bottom. Feedback comes back one sample later, as in the circuit.
+def('phaser', { name:'Phaser', cat:'Mod', color:'#9cf', desc:'Phase 90, Small Stone, or a Univibe with its lamp-and-photocell throb.',
+  params:{ rate:P('Rate',0.05,8,0.5,'Hz'), depth:P('Depth',0,100,70,'%'), center:P('Center',100,3000,600,'Hz'), stages:E('Stages',['4','6','8'],0), fb:P('Feedback',0,90,30,'%'), mix:P('Mix',0,100,50,'%'), model:E('Model',['Phase 90','Small Stone','Univibe'],0), color:B('Color',0) },
+  note(b){ const m=b.p.model|0; return m===0 ? 'Four matched stages and a triangle sweep. Mix 50 gives the deepest notches.' : m===1 ? 'A rounder, wider sweep. Color adds regeneration for the hollow EHX sound.' : 'The stages sit at four different pitches and the lamp flashes once a cycle. Mix 100 is Vibrato mode, with no dry.'; },
+  spec(b,k,s){ if(k==='color' && (b.p.model|0)!==1) return Object.assign({},s,{l:'Color (Small Stone)'}); return null; },
+  build(ctx,b){ const n=b.n, p=b.p; n.f=new AudioWorkletNode(ctx,'np-phaser',{outputChannelCount:[2], parameterData:{rate:p.rate, depth:p.depth/100, center:p.center, stages:[4,6,8][p.stages|0]||4, fb:p.fb/100, mix:p.mix/100, model:p.model|0, color:p.color|0}}); b.wetIn.connect(n.f).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p; wp(n.f,'rate',p.rate); wp(n.f,'depth',p.depth/100); wp(n.f,'center',p.center); n.f.parameters.get('stages').value=[4,6,8][p.stages|0]||4; wp(n.f,'fb',p.fb/100); wp(n.f,'mix',p.mix/100); n.f.parameters.get('model').value=p.model|0; n.f.parameters.get('color').value=p.color|0; }
+});
+
+// ---------- Tremolo: optical, bias, or harmonic ----------
+// The LFO goes through a lowpass (so Square has no click) and then a curve that gives each model its own wave. The sound is split into two bands with a
+// Linkwitz-Riley crossover that sums flat; Optical and Bias move both bands together, Harmonic moves them against each other.
+const TREM_PW=[2.0,1.2,1];   // curve power per model: Optical stays loud and dips quick (the photocell), Bias is a soft throb, Harmonic is a plain crossfade
+function tremGains(p){ const d=p.depth/100, h=(p.model|0)===2, bias=(p.model|0)===1;
+  return { lo:1-d, hi:h?1:1-d, dgL:d, dgH:h?-d:d, pg:p.stereo?0.9:0, dop:bias?0.0004*d:0, tone:bias?500*d:0, dly:bias?0.0008:0 }; }
+def('trem', { name:'Tremolo', cat:'Mod', color:'#9cf', desc:'Optical, tube-bias, or Brownface harmonic tremolo. Three real amp circuits.',
+  params:{ rate:P('Rate',0.1,20,4,'Hz'), depth:P('Depth',0,100,60,'%'), shape:E('Shape',['Sine','Triangle','Square'],0), stereo:B('Stereo Pan',0), model:E('Model',['Optical','Bias','Harmonic'],0) },
+  note(b){ const m=b.p.model|0; return m===0 ? 'A lamp and a photocell. Smooth, with a wider dip than peak.' : m===1 ? 'The tubes themselves pulse. Throbbing, with a little pitch and tone wobble on top.' : 'Lows and highs pulse against each other, split at 650 Hz. Sounds halfway to a Univibe.'; },
+  build(ctx,b){ const n=b.n, p=b.p, g=tremGains(p);
+    n.lfo=mkLFO(ctx,['sine','triangle','square'][p.shape|0]); n.lfo.frequency.value=p.rate; n.sm=ctx.createBiquadFilter(); n.sm.type='lowpass'; n.sm.frequency.value=50; n.sm.Q.value=0.5;
+    n.sh=ctx.createWaveShaper(); keyCurve(n.sh,'pw'+TREM_PW[p.model|0],()=>lfoCurve(TREM_PW[p.model|0]));
+    n.dgL=ctx.createGain(); n.dgL.gain.value=g.dgL; n.dgH=ctx.createGain(); n.dgH.gain.value=g.dgH; n.pg=ctx.createGain(); n.pg.gain.value=g.pg; n.dop=ctx.createGain(); n.dop.gain.value=g.dop; n.tg=ctx.createGain(); n.tg.gain.value=g.tone;
+    n.dly=ctx.createDelay(0.01); n.dly.delayTime.value=g.dly; n.tone=ctx.createBiquadFilter(); n.tone.type='lowpass'; n.tone.frequency.value=(p.model|0)===1?2500:ctx.sampleRate/2; n.tone.Q.value=0.5;   // at half the sample rate the filter is a straight wire
+    n.lp=lr4(ctx,'lowpass',650); n.hp=lr4(ctx,'highpass',650); n.lo=ctx.createGain(); n.lo.gain.value=g.lo; n.hi=ctx.createGain(); n.hi.gain.value=g.hi; n.pan=ctx.createStereoPanner();
+    n.lfo.connect(n.sm).connect(n.sh); n.sh.connect(n.dgL).connect(n.lo.gain); n.sh.connect(n.dgH).connect(n.hi.gain); n.sm.connect(n.pg).connect(n.pan.pan); n.sm.connect(n.dop).connect(n.dly.delayTime); n.sm.connect(n.tg).connect(n.tone.detune);
+    b.wetIn.connect(n.dly).connect(n.tone); n.tone.connect(n.lp.i); n.lp.o.connect(n.lo).connect(n.pan); n.tone.connect(n.hp.i); n.hp.o.connect(n.hi).connect(n.pan); n.pan.connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p, g=tremGains(p); n.lfo.frequency.value=p.rate; n.lfo.type=['sine','triangle','square'][p.shape|0]; keyCurve(n.sh,'pw'+TREM_PW[p.model|0],()=>lfoCurve(TREM_PW[p.model|0]));
+    setP(n.lo.gain,g.lo); setP(n.hi.gain,g.hi); setP(n.dgL.gain,g.dgL); setP(n.dgH.gain,g.dgH); setP(n.pg.gain,g.pg); setP(n.dop.gain,g.dop); setP(n.tg.gain,g.tone); setP(n.dly.delayTime,g.dly,0.05); n.tone.frequency.value=(p.model|0)===1?2500:NP.ctx.sampleRate/2; }
+});
+
+// ---------- Vibrato: a BBD line swept by the LFO, with a Rise control ----------
+// Rise: the sound's own level is rectified (a |x| curve), smoothed by a slow lowpass, squashed to 0..1, and used to scale the LFO. So each note's
+// wobble fades in, like a player's hand. At Rise 0 the LFO goes straight through.
+function vibGains(p){ const r=p.rise>0; return { sw:p.depth/100*0.004, envOn:r?1:0, lfoOn:r?0:1, fc:r?Math.max(0.1,1000/(2*Math.PI*p.rise*0.35)):10 }; }
+def('vibrato', { name:'Vibrato', cat:'Mod', color:'#9cf', desc:'BBD pitch vibrato. Rise makes the wobble fade in after each note starts.',
+  params:{ rate:P('Rate',0.5,12,5,'Hz'), depth:P('Depth',0,100,30,'%'), rise:P('Rise',0,2000,0,'ms'), shape:E('Shape',['Sine','Triangle'],0) },
+  note(b){ return b.p.rise>0 ? 'Each note starts straight and the wobble grows in over about '+Math.round(b.p.rise)+' ms.' : 'Set Rise above 0 to make the wobble fade in after each note starts.'; },
+  build(ctx,b){ const n=b.n, p=b.p, g=vibGains(p);
+    n.lfo=mkLFO(ctx,p.shape?'triangle':'sine'); n.lfo.frequency.value=p.rate; n.mul=ctx.createGain(); n.mul.gain.value=g.lfoOn; n.sw=ctx.createGain(); n.sw.gain.value=g.sw;
+    n.rect=ctx.createWaveShaper(); keyCurve(n.rect,'abs',()=>{ const c=new Float32Array(8192); for(let i=0;i<8192;i++) c[i]=Math.abs((i/8191)*2-1); return c; }); n.env=ctx.createBiquadFilter(); n.env.type='lowpass'; n.env.Q.value=0.5; n.env.frequency.value=g.fc;
+    n.sq=ctx.createWaveShaper(); keyCurve(n.sq,'sq',()=>{ const c=new Float32Array(8192); for(let i=0;i<8192;i++){ const x=(i/8191)*2-1; c[i]=Math.tanh(Math.max(0,x)*24); } return c; }); n.eg=ctx.createGain(); n.eg.gain.value=g.envOn;
+    n.sat=ctx.createWaveShaper(); keyCurve(n.sat,'k1.6',()=>bbdCurve(1.6)); n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.frequency.value=bbdLP(6,9000); n.lp.Q.value=0.7; n.d=ctx.createDelay(0.05); n.d.delayTime.value=0.006;
+    n.lfo.connect(n.mul).connect(n.sw).connect(n.d.delayTime); b.wetIn.connect(n.rect).connect(n.env).connect(n.sq).connect(n.eg).connect(n.mul.gain);
+    b.wetIn.connect(n.sat).connect(n.lp).connect(n.d).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p, g=vibGains(p); n.lfo.frequency.value=p.rate; n.lfo.type=p.shape?'triangle':'sine'; setP(n.sw.gain,g.sw); setP(n.mul.gain,g.lfoOn); setP(n.eg.gain,g.envOn); n.env.frequency.value=g.fc; }
+});
+
+// ---------- Rotary Speaker: a Leslie with a horn rotor and a drum rotor ----------
+// The sound is driven by a tube stage, split at the crossover. The horn gets Doppler (a swept delay) and deep level pulsing; the drum mostly level pulsing with a little Doppler.
+// Two mics on each rotor. Mic Spread moves the right mic from beside the left one (0, mono) around to the far side (100, left and right pulse against each other).
+// Fast and slow speeds are from the 122/147: horn 6.8 / 0.8 Hz, drum 5.8 / 0.7 Hz. The horn is light and changes speed fast; the drum is heavy and takes seconds.
+const ROT_SPD=[[0.8,0.7],[6.8,5.8],[0,0]];   // [horn, drum] Hz for Slow, Fast, Brake
+function rotTau(p, up){ const mul=1.9-1.8*p.accel/100; return { h:(up?0.4:0.6)*mul, d:(up?1.5:2.5)*mul }; }
+function rotGains(p){ const w=1-2*p.width/100, mix=p.mix/100; return { hL:0.3, hR:0.3*w, dL:0.22, dR:0.22*w, dopL:0.0005, dopR:0.0005*w, ddopL:0.00012, ddopR:0.00012*w, wet:mix*0.95, dry:1-mix }; }
+// The tube stage: an asymmetric soft clip whose output is pulled back as the drive goes up, so Drive changes the sound more than the level.
+function rotCurve(drive){ const N=8192, c=new Float32Array(N), k=1+3*drive, m=Math.pow(k,0.75); for(let i=0;i<N;i++){ const u=k*((i/(N-1))*2-1); c[i]=(Math.tanh(u+0.12)-Math.tanh(0.12))/m; } return c; }
+def('rotary', { name:'Rotary Speaker', cat:'Mod', color:'#9cf', desc:'A Leslie 122. Horn and drum rotors with real speed-up and slow-down, two mics, tube drive.',
+  params:{ speed:E('Speed',['Slow','Fast','Brake'],0), drive:P('Drive',0,100,20,'%'), mix:P('Mix',0,100,70,'%'), xo:P('Crossover',200,1500,700,'Hz'), accel:P('Accel',0,100,50,'%'), width:P('Mic Spread',0,100,70,'%') },
+  note(b){ return b.p.speed===2 ? 'Brake: both rotors coast to a stop. Pick Slow or Fast to start them again.' : 'Switch Slow and Fast while playing: the horn gets there in about a second, the drum takes a few. Accel makes both quicker.'; },
+  build(ctx,b){ const n=b.n, p=b.p, g=rotGains(p), spd=ROT_SPD[p.speed|0]||ROT_SPD[0]; n.spd=p.speed|0;
+    n.sh=ctx.createWaveShaper(); keyCurve(n.sh,'d'+p.drive,()=>rotCurve(p.drive/100)); n.dc=ctx.createBiquadFilter(); n.dc.type='highpass'; n.dc.frequency.value=12; n.dc.Q.value=0.5;
+    n.lp=lr4(ctx,'lowpass',p.xo); n.hp=lr4(ctx,'highpass',p.xo); n.hlp=ctx.createBiquadFilter(); n.hlp.type='lowpass'; n.hlp.frequency.value=7000; n.hlp.Q.value=0.6;
+    n.lfoH=mkLFO(ctx); n.lfoH.frequency.value=spd[0]; n.lfoD=mkLFO(ctx); n.lfoD.frequency.value=spd[1];
+    n.dHL=ctx.createDelay(0.01); n.dHL.delayTime.value=0.0015; n.dHR=ctx.createDelay(0.01); n.dHR.delayTime.value=0.0015; n.tHL=ctx.createGain(); n.tHL.gain.value=0.7; n.tHR=ctx.createGain(); n.tHR.gain.value=0.7;
+    n.dDL=ctx.createDelay(0.01); n.dDL.delayTime.value=0.0005; n.dDR=ctx.createDelay(0.01); n.dDR.delayTime.value=0.0005; n.tDL=ctx.createGain(); n.tDL.gain.value=0.78; n.tDR=ctx.createGain(); n.tDR.gain.value=0.78;
+    const mk=(v)=>{ const x=ctx.createGain(); x.gain.value=v; return x; }; n.gHL=mk(g.hL); n.gHR=mk(g.hR); n.gDL=mk(g.dL); n.gDR=mk(g.dR); n.oHL=mk(g.dopL); n.oHR=mk(g.dopR); n.oDL=mk(g.ddopL); n.oDR=mk(g.ddopR);
+    n.lfoH.connect(n.gHL).connect(n.tHL.gain); n.lfoH.connect(n.gHR).connect(n.tHR.gain); n.lfoH.connect(n.oHL).connect(n.dHL.delayTime); n.lfoH.connect(n.oHR).connect(n.dHR.delayTime);
+    n.lfoD.connect(n.gDL).connect(n.tDL.gain); n.lfoD.connect(n.gDR).connect(n.tDR.gain); n.lfoD.connect(n.oDL).connect(n.dDL.delayTime); n.lfoD.connect(n.oDR).connect(n.dDR.delayTime);
+    n.mg=ctx.createChannelMerger(2); n.wet=ctx.createGain(); n.wet.gain.value=g.wet; n.dry=ctx.createGain(); n.dry.gain.value=g.dry;
+    b.wetIn.connect(n.sh).connect(n.dc); n.dc.connect(n.hp.i); n.hp.o.connect(n.hlp); n.hlp.connect(n.dHL).connect(n.tHL).connect(n.mg,0,0); n.hlp.connect(n.dHR).connect(n.tHR).connect(n.mg,0,1);
+    n.dc.connect(n.lp.i); n.lp.o.connect(n.dDL).connect(n.tDL).connect(n.mg,0,0); n.lp.o.connect(n.dDR).connect(n.tDR).connect(n.mg,0,1);
+    n.mg.connect(n.wet).connect(b.wetOut); b.wetIn.connect(n.dry).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p, g=rotGains(p); keyCurve(n.sh,'d'+p.drive,()=>rotCurve(p.drive/100)); n.lp.set(p.xo); n.hp.set(p.xo);
+    const s=p.speed|0, spd=ROT_SPD[s]||ROT_SPD[0], was=ROT_SPD[n.spd]||ROT_SPD[0], tau=rotTau(p, spd[0]>was[0]); n.spd=s;   // speed up is quicker than slowing down
+    setP(n.lfoH.frequency,spd[0],tau.h); setP(n.lfoD.frequency,spd[1],tau.d);
+    setP(n.gHL.gain,g.hL); setP(n.gHR.gain,g.hR); setP(n.gDL.gain,g.dL); setP(n.gDR.gain,g.dR); setP(n.oHL.gain,g.dopL); setP(n.oHR.gain,g.dopR); setP(n.oDL.gain,g.ddopL); setP(n.oDR.gain,g.ddopR); setP(n.wet.gain,g.wet); setP(n.dry.gain,g.dry); }
+});
+
+// ---------- Ring Mod ----------
+def('ring', { name:'Ring Mod', cat:'Mod', color:'#9cf', desc:'Multiplies the sound by a carrier. Bells, robots and clangs. Tone takes the edge off.',
+  params:{ freq:P('Freq',20,2000,200,'Hz'), mix:P('Mix',0,100,50,'%'), shape:E('Shape',['Sine','Square','Triangle','Saw'],0), tone:P('Tone',500,12000,8000,'Hz') },
+  note(b){ return 'Tune Freq to the key for bell tones. Square and Saw carriers add more clang.'; },
+  build(ctx,b){ const n=b.n, p=b.p; n.o=mkLFO(ctx,['sine','square','triangle','sawtooth'][p.shape|0]); n.o.frequency.value=p.freq; n.r=ctx.createGain(); n.r.gain.value=0; n.o.connect(n.r.gain); n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.Q.value=0.6; n.lp.frequency.value=p.tone;
+    n.w=ctx.createGain(); n.w.gain.value=p.mix/100; n.d=ctx.createGain(); n.d.gain.value=1-p.mix/100; b.wetIn.connect(n.r).connect(n.lp).connect(n.w).connect(b.wetOut); b.wetIn.connect(n.d).connect(b.wetOut); },
+  apply(b){ const n=b.n, p=b.p; n.o.frequency.value=p.freq; n.o.type=['sine','square','triangle','sawtooth'][p.shape|0]; n.lp.frequency.value=p.tone; setP(n.w.gain,p.mix/100); setP(n.d.gain,1-p.mix/100); }
+});
+
+// ---------- Bit Crusher (worklet np-crusher2: the old crusher plus an anti-alias filter) ----------
+def('crush', { name:'Bit Crusher', cat:'Mod', color:'#9cf', desc:'Fewer bits and a lower sample rate. Filter on for clean lo-fi, off for harsh.',
+  params:{ bits:P('Bits',2,16,8,'',1), rate:P('Downsample',1,64,1,'x',1), mix:P('Mix',0,100,100,'%'), filter:B('Filter',0) },
+  note(b){ return b.p.filter ? 'Filter on: a lowpass before and after the downsampler keeps the aliasing out. Smooth, old-sampler lo-fi.' : 'Filter off: raw aliasing. Turn it on for the clean lo-fi sound.'; },
+  build(ctx,b){ const p=b.p; b.n.c=new AudioWorkletNode(ctx,'np-crusher2',{outputChannelCount:[2], parameterData:{bits:p.bits, rate:p.rate, mix:p.mix/100, filter:p.filter|0}}); b.wetIn.connect(b.n.c).connect(b.wetOut); },
+  apply(b){ const c=b.n.c, p=b.p; c.parameters.get('bits').value=p.bits; c.parameters.get('rate').value=p.rate; c.parameters.get('mix').value=p.mix/100; c.parameters.get('filter').value=p.filter|0; }
+});
+
+// ===== Neon Peach 2.4: delay, reverb and pitch, rebuilt as pedal models. Each def() here replaces the block of the same type from engine.js. =====
+// Built on five new worklets in worklets_time.js (np-delay, np-taps, np-verb, np-oc2, np-pitch2), each with a C++ twin in procs_time.cpp. Trails wiring (b.wetDry, b.trailsWet, b.trailsIn) is the same as before.
+'use strict';
+
+// ---------- Delay: four real machines behind one set of knobs (np-delay) ----------
+// Digital: clean repeats, with a 12-bit / 12 kHz lo-fi mode on the Lo-Fi knob.
+// Tape (Echoplex EP-3 / Space Echo RE-201): wow and flutter from two LFOs, a head bump at 110 Hz, tape saturation and hiss in the repeats, highs that fade more each pass.
+// Analog (Boss DM-2 / Memory Man BBD): the clock slows and the bandwidth falls as the time grows, soft clipping in the loop, repeats get darker and grainier.
+// Ping Pong: the Digital machine, bouncing left and right.
+// The whole loop runs inside the processor: a feedback loop made of nodes lands a block early or late depending on the engine, and this one never does.
+const DLY_TYPES=['Digital','Tape','Analog','Ping Pong'];
+function dlyGains(p){ return { inG:1, wet:p.mix/100*((p.type|0)===3?0.95:1.2) }; }
+function dlyParams(p){ return { type:p.type|0, time:clampN(delayTimeMs(p),1,3900), fb:p.fb/100, lowcut:p.lowcut, highcut:p.highcut, mod:p.mod/100, age:(p.age==null?25:p.age)/100, lofi:(p.lofi||0)/100 }; }
+def('delay', { name:'Delay', cat:'Delay', color:'#fd8', desc:'Echoes. A clean digital, a worn tape machine, a dark analog box, or ping pong.',
+  params:{ type:E('Type',DLY_TYPES,0), time:P('Time',10,2000,375,'ms'), sync:E('Sync',SYNC,0), fb:P('Feedback',0,100,35,'%'), mix:P('Mix',0,100,30,'%'), lowcut:P('Low Cut',20,1000,120,'Hz'), highcut:P('High Cut',500,12000,5000,'Hz'), mod:P('Wow',0,100,0,'%'), trails:B('Trails',1),
+    age:P('Age',0,100,25,'%'), lofi:P('Lo-Fi',0,100,0,'%') },
+  spec(b,k,s){ const t=b.p.type|0; if(k==='age' && t!==1 && t!==2) return Object.assign({},s,{l:'Age (tape, analog)'}); if(k==='lofi' && t!==0 && t!==3) return Object.assign({},s,{l:'Lo-Fi (digital)'}); if(k==='mod') return Object.assign({},s,{l:t===1?'Wow & Flutter':(t===2?'Clock Wobble':'Mod')}); return null; },
+  note(b){ const t=b.p.type|0; return t===1 ? 'Age wears the tape: more wow and flutter, duller repeats, more squash and hiss. Feedback at 100 runs away slowly, like a real Space Echo.'
+    : t===2 ? 'Longer times get darker and grainier, like a real bucket-brigade chip. Age adds grit and clock wobble.'
+    : t===3 ? 'Each echo jumps to the other side. Lo-Fi makes it a 12-bit rack unit.' : 'Clean repeats. Lo-Fi turns it into a 12-bit, 12 kHz rack unit from 1985.'; },
+  build(ctx,b){ const n=b.n, p=b.p, g=dlyGains(p);
+    n.inG=ctx.createGain(); n.d=new AudioWorkletNode(ctx,'np-delay',{outputChannelCount:[2], parameterData:dlyParams(p)}); n.wet=ctx.createGain(); b.wetDry=ctx.createGain();
+    for(const k in g) n[k].gain.value=g[k];
+    b.wetIn.connect(b.wetDry).connect(b.wetOut); b.wetIn.connect(n.inG).connect(n.d).connect(n.wet).connect(b.wetOut);
+    b.trailsWet=n.wet; b.trailsIn=n.inG; },
+  apply(b){ const n=b.n, p=b.p, g=dlyGains(p), q=dlyParams(p); for(const k in g) setP(n[k].gain, g[k]); for(const k in q) n.d.parameters.get(k).value=q[k]; }   // the processor glides the time itself
+});
+
+// ---------- Multi-tap: up to four echoes off one line, spaced by a pattern (np-taps) ----------
+const MD_PAT=['Even','Dotted','Triplet','Golden'];
+function mdGains(p){ return { inG:1, wet:p.mix/100 }; }
+function mdParams(p){ const mul=[4,3,8/3,4.236][p.pattern|0]||4; return { time:Math.min(1900, 7900/mul, delayTimeMs(p)), fb:p.fb/100, highcut:p.highcut, spread:p.spread/100, taps:p.taps|0, pattern:p.pattern|0 }; }
+def('mdelay', { name:'Multi-Tap Delay', cat:'Delay', color:'#fd8', desc:'Up to four echo taps, spaced even, dotted, triplet or golden.',
+  params:{ time:P('Time',10,2000,250,'ms'), sync:E('Sync',SYNC,0), taps:P('Taps',1,4,3,'',1), fb:P('Feedback',0,90,20,'%'), spread:P('Spread',0,100,60,'%'), mix:P('Mix',0,100,30,'%'), highcut:P('High Cut',500,12000,4000,'Hz'), trails:B('Trails',1), pattern:E('Pattern',MD_PAT,0) },
+  note(b){ return ['Taps land on every beat of the time.','Taps land every three quarters of the time: a dotted feel.','Taps land every two thirds of the time: a triplet feel.','Taps spread by the golden ratio, so they never line up. A smear, not a rhythm.'][b.p.pattern|0]; },
+  build(ctx,b){ const n=b.n, p=b.p, g=mdGains(p);
+    n.inG=ctx.createGain(); n.t=new AudioWorkletNode(ctx,'np-taps',{outputChannelCount:[2], parameterData:mdParams(p)}); n.wet=ctx.createGain(); b.wetDry=ctx.createGain();
+    for(const k in g) n[k].gain.value=g[k];
+    b.wetIn.connect(b.wetDry).connect(b.wetOut); b.wetIn.connect(n.inG).connect(n.t).connect(n.wet).connect(b.wetOut);
+    b.trailsWet=n.wet; b.trailsIn=n.inG; },
+  apply(b){ const n=b.n, p=b.p, g=mdGains(p), q=mdParams(p); for(const k in g) setP(n[k].gain, g[k]); for(const k in q) n.t.parameters.get(k).value=q[k]; }
+});
+
+// ---------- Reverb: an algorithmic reverb (np-verb) in place of the old noise IR ----------
+// Room, Hall, Plate, Cathedral: an 8-line feedback delay network, each type with its own line lengths, damping and early reflections.
+// Spring: three springs made of stretched allpass chains, so every echo chirps. Shimmer: the Hall, with the tail fed back through a +12 shifter.
+// Decay is RT60: the seconds the tail takes to drop 60 dB.
+const VERB_TYPES=['Room','Hall','Plate','Spring','Cathedral','Shimmer'];
+function verbGains(p){ return { inG:1, wet:p.mix/100*1.5, shg:p.shimmer/100*0.5 }; }
+def('reverb', { name:'Reverb', cat:'Reverb', color:'#bdf', desc:'Room, hall, plate, spring, cathedral or shimmer. Decay is the real ring-out time.',
+  params:{ type:E('Type',VERB_TYPES,1), decay:P('Decay',0.2,8,2,'s'), predelay:P('Pre-Delay',0,200,10,'ms'), mix:P('Mix',0,100,25,'%'), lowcut:P('Low Cut',20,1000,150,'Hz'), highcut:P('High Cut',1000,16000,7000,'Hz'), shimmer:P('Shimmer',0,100,0,'%'), trails:B('Trails',1) },
+  note(b){ const t=b.p.type|0; return ['A small room. Short, with early slaps you can hear.','A concert hall. Long, smooth and dark.','A steel plate. Dense, bright and fast.','Three springs in a tank. Dig in for the boing.','A stone cathedral. Very long, very washed out.','The hall, with the tail fed back an octave up. Shimmer sets how much.'][t]+(t===5?'':' Decay is the time the tail takes to fade 60 dB.'); },
+  build(ctx,b){ const n=b.n, p=b.p, g=verbGains(p);
+    n.inG=ctx.createGain(); n.v=new AudioWorkletNode(ctx,'np-verb',{outputChannelCount:[2], parameterData:{type:p.type|0, decay:p.decay, predelay:p.predelay, damp:p.highcut}});
+    n.hp=ctx.createBiquadFilter(); n.hp.type='highpass'; n.hp.Q.value=0.7; n.hp.frequency.value=p.lowcut; n.lp=ctx.createBiquadFilter(); n.lp.type='lowpass'; n.lp.Q.value=0.7; n.lp.frequency.value=p.highcut; n.wet=ctx.createGain(); b.wetDry=ctx.createGain();
+    // shimmer: the wet tail, an octave up, back into the reverb. A limiter in the loop keeps a long decay from running away.
+    n.sh=new AudioWorkletNode(ctx,'np-pitch',{outputChannelCount:[2]}); n.sh.parameters.get('semitones').value=12; n.shg=ctx.createGain(); n.shl=new AudioWorkletNode(ctx,'np-limit',{outputChannelCount:[2]}); n.shl.parameters.get('ceiling').value=-12; n.shl.parameters.get('release').value=200; n.shd=ctx.createDelay(0.1); n.shd.delayTime.value=0.03;
+    for(const k in g) n[k].gain.value=g[k];
+    b.wetIn.connect(b.wetDry).connect(b.wetOut);
+    b.wetIn.connect(n.inG).connect(n.v).connect(n.hp).connect(n.lp).connect(n.wet).connect(b.wetOut); n.lp.connect(n.sh).connect(n.shg).connect(n.shl).connect(n.shd).connect(n.inG);
+    b.trailsWet=n.wet; b.trailsIn=n.inG; },
+  apply(b){ const n=b.n, p=b.p, g=verbGains(p); for(const k in g) setP(n[k].gain, g[k]);
+    const v=n.v.parameters; v.get('type').value=p.type|0; v.get('decay').value=p.decay; v.get('predelay').value=p.predelay; v.get('damp').value=p.highcut; n.hp.frequency.value=p.lowcut; n.lp.frequency.value=p.highcut; }
+});
+
+// ---------- Sub Octave: a Boss OC-2 (np-oc2) ----------
+def('octave', { name:'Sub Octave', cat:'Pitch', color:'#c9f', desc:'A Boss OC-2. Analog-style octaves down that follow your note and die with it.',
+  params:{ sub1:P('-1 Oct',0,100,70,'%'), sub2:P('-2 Oct',0,100,0,'%'), up:P('+1 Oct',0,100,0,'%'), dry:P('Dry',0,100,100,'%'), tone:P('Tone',100,4000,600,'Hz'), track:P('Tracking',100,800,300,'Hz') },
+  note(b){ return 'Tracking is the filter the pitch follower listens through. Set it a little above your highest note; lower is steadier. Tone rounds off the subs.'; },
+  build(ctx,b){ const p=b.p; b.n.o=new AudioWorkletNode(ctx,'np-oc2',{outputChannelCount:[2], parameterData:{sub1:p.sub1/100, sub2:p.sub2/100, up:p.up/100, dry:p.dry/100, tone:p.tone, track:p.track}}); b.wetIn.connect(b.n.o).connect(b.wetOut); },
+  apply(b){ const o=b.n.o,p=b.p; wp(o,'sub1',p.sub1/100); wp(o,'sub2',p.sub2/100); wp(o,'up',p.up/100); wp(o,'dry',p.dry/100); o.parameters.get('tone').value=p.tone; o.parameters.get('track').value=p.track; }
+});
+
+// ---------- Pitch Shift and Harmonizer: the splice-searching shifter (np-pitch2) ----------
+def('pitch', { name:'Pitch Shift', cat:'Pitch', color:'#c9f', desc:'Shift up or down by any amount. Splices where the waves line up, so a bass note stays smooth.',
+  params:{ semi:P('Semitones',-24,24,-12,'st',1), cents:P('Cents',-100,100,0,'c'), mix:P('Mix',0,100,100,'%'), grain:P('Grain',15,150,40,'ms') },
+  note(b){ const r=Math.pow(2,b.p.semi/12), ms=r>1 ? b.p.grain/r*(0.5*(r-1)+0.2) : b.p.grain*(0.2+(1-r)/2); return 'Grain is the slice size. Longer is smoother on low notes but adds delay: about '+Math.round(ms)+' ms at this setting.'; },
+  build(ctx,b){ const p=b.p; b.n.p=new AudioWorkletNode(ctx,'np-pitch2',{outputChannelCount:[2], parameterData:{semitones:p.semi, cents:p.cents, mix:p.mix/100, grain:p.grain}}); b.wetIn.connect(b.n.p).connect(b.wetOut); },
+  apply(b){ const o=b.n.p,p=b.p; o.parameters.get('semitones').value=p.semi; o.parameters.get('cents').value=p.cents; wp(o,'mix',p.mix/100); o.parameters.get('grain').value=p.grain; }
+});
+function harmGains(p){ return { g1:p.l1/100, g2:p.l2/100, d:p.dry/100 }; }
+def('harm', { name:'Harmonizer', cat:'Pitch', color:'#c9f', desc:'Two harmony voices, spread left and right.',
+  params:{ v1:P('Voice 1',-24,24,7,'st',1), l1:P('Level 1',0,100,60,'%'), v2:P('Voice 2',-24,24,-12,'st',1), l2:P('Level 2',0,100,0,'%'), dry:P('Dry',0,100,100,'%'), spread:P('Spread',0,100,50,'%') },
+  build(ctx,b){ const n=b.n, p=b.p, g=harmGains(p); n.p1=new AudioWorkletNode(ctx,'np-pitch2',{outputChannelCount:[2], parameterData:{semitones:p.v1, grain:40}}); n.p2=new AudioWorkletNode(ctx,'np-pitch2',{outputChannelCount:[2], parameterData:{semitones:p.v2, grain:40}}); n.g1=ctx.createGain(); n.g2=ctx.createGain(); n.pan1=ctx.createStereoPanner(); n.pan2=ctx.createStereoPanner(); n.d=ctx.createGain();
+    for(const k in g) n[k].gain.value=g[k]; n.pan1.pan.value=-p.spread/100; n.pan2.pan.value=p.spread/100;
+    b.wetIn.connect(n.p1).connect(n.g1).connect(n.pan1).connect(b.wetOut); b.wetIn.connect(n.p2).connect(n.g2).connect(n.pan2).connect(b.wetOut); b.wetIn.connect(n.d).connect(b.wetOut); },
+  apply(b){ const n=b.n,p=b.p, g=harmGains(p); n.p1.parameters.get('semitones').value=p.v1; n.p2.parameters.get('semitones').value=p.v2; for(const k in g) setP(n[k].gain, g[k]); n.pan1.pan.value=-p.spread/100; n.pan2.pan.value=p.spread/100; }
+});
+
 /* Neon Peach neural core.
    Reads .nam model files (the open Neural Amp Modeler format) and plays them.
    The same file runs on the page, inside the audio worklet, and in Node tests. */
@@ -5567,7 +6615,7 @@ function updateParamViews(b,k){ const s=paramSpec(b,k); const v=b.p[k]; const pv
   refreshKnobs(); }
 
 // --- Library ---
-const NEW_BLOCKS=['head','raspberry'];
+const NEW_BLOCKS=['head','raspberry','b3k','vintage','alpha','omega','ignis','od','fold','tubepre','muff','octfuzz','comp','gate','limiter','envf','wah','filter','chorus','flanger','phaser','trem','vibrato','rotary','ring','crush','delay','mdelay','reverb','octave','pitch','harm'];
 function showLibrary(path){ if(totalBlocks()>=MAX_BLOCKS){ toast('24 blocks is the limit. Delete one first.'); return; }
   const sel=selectedBlock&&selectedBlock(), after=sel&&refOf(sel)&&refOf(sel)[0]===path?sel:null;
   const groups=CATS.map(c=>{ const items=Object.values(BLOCKS).filter(d=>d.cat===c && (d.type!=='capture'||NP.captures.length)); if(!items.length) return ''; return `<div class="lgroup" data-cat="${c}" style="--c:${CAT_COLOR[c]}"><div class="lcat">${icon(CAT_ICON[c])}${c}</div><div class="litems">${items.map(d=>`<button class="litem" data-lib="${d.type}" data-q="${esc((d.name+' '+c+' '+(d.desc||'')).toLowerCase())}" title="${esc(d.desc||'')}"><b>${esc(d.name)}${NEW_BLOCKS.includes(d.type)?'<i class="newtag">new</i>':''}</b><span>${esc(d.desc||'')}</span></button>`).join('')}</div></div>`; }).join('');
@@ -5667,7 +6715,7 @@ PAGE_RENDER.global=()=>{ const g=NP.globals; const f=['60','180','500','1.2k','3
   <section class="pane"><h4 class="pane-h">Keyboard</h4><div class="keys"><span><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd>Footswitches</span><span><kbd>Space</kbd>Tap tempo</span><span><kbd>T</kbd>Tuner</span><span><kbd>M</kbd>Next mode</span><span><kbd>R</kbd>Loop record</span><span><kbd>S</kbd>Loop stop</span><span><kbd>B</kbd>Beats</span><span><kbd>F</kbd>Stage mode</span><span><kbd>Ctrl</kbd><kbd>Z</kbd>Undo</span></div></section></div>`; };
 
 // --- Help ---
-const HELP_FEAT=[['Drive','Eleven drives, including Split Grind (clean lows, dirty highs), Peach Muff and Octave Fuzz.'],['Amp','The Neon 900 and Melted Raspberry: Darkglass-style heads with Microtubes and Alpha·Omega drive. Plus eight classic amp heads with sag.'],['Clone','Copy any pedal or plugin, or load .nam and IR files. Exports .nam files too.'],['Cab','Eight cabs, four mic types, and your own IR files.'],['Dynamics','Compressor with blend, three-band compressor, gate, limiter and Auto Swell. None of them add delay.'],['EQ','Parametric, 10-band graphic, a 6-band shaper, cuts, and Tone Match.'],['Pitch','Sub octave, pitch shift and a two-voice harmonizer.'],['Synth','Peach Synth follows the notes you play. Freeze holds a note as a pad.'],['Filter','Envelope filter, pedal wah, Talk Box and a multi filter.'],['Mod','Chorus, flanger, phaser, tremolo, vibrato, rotary, ring mod, bit crusher, Doubler and Stutter.'],['Delay','Digital, tape, analog, ping pong, multi-tap and reverse. Tempo sync and trails.'],['Routing','FX Loop for real pedals. Aux Send for a stage amp.'],['Reverb','Room, hall, plate, spring, cathedral and shimmer.'],['Looper','Three minutes. Dub, undo, reverse and half speed.']];
+const HELP_FEAT=[['Drive','Real pedal models: B3K and Vintage CMOS stages, the Alpha·Omega circuit, a germanium fuzz, a Tube Screamer, a Big Muff, an Octavia, a tube stage and a wavefolder.'],['Amp','The Neon 900 and Melted Raspberry: Darkglass-style heads with Microtubes and Alpha·Omega drive. Plus eight classic amp heads with sag.'],['Clone','Copy any pedal or plugin, or load .nam and IR files. Exports .nam files too.'],['Cab','Eight cabs, four mic types, and your own IR files.'],['Dynamics','Compressor with OTA, Opto, FET and VCA circuits, an NS-2 style gate, a limiter, three-band compressor and Auto Swell. None of them add delay.'],['EQ','Parametric, 10-band graphic, a 6-band shaper, cuts, and Tone Match.'],['Pitch','An OC-2 style sub octave, a clean pitch shifter and a two-voice harmonizer.'],['Synth','Peach Synth follows the notes you play. Freeze holds a note as a pad.'],['Filter','Mutron-style envelope filter, Cry Baby / 105Q / Vox wah, Talk Box and a Moog ladder filter.'],['Mod','BBD chorus (CE-2, Dimension D, Tri), BBD flanger, Phase 90 / Small Stone / Univibe phaser, optical, bias and harmonic tremolo, a real Leslie, ring mod, bit crusher, Doubler and Stutter.'],['Delay','Echoplex tape, BBD analog, digital with lo-fi, ping pong, multi-tap and reverse. Tempo sync and trails.'],['Routing','FX Loop for real pedals. Aux Send for a stage amp.'],['Reverb','A real algorithmic reverb: room, hall, plate, three springs, cathedral and shimmer.'],['Looper','Three minutes. Dub, undo, reverse and half speed.']];
 PAGE_RENDER.help=()=>`<div class="lead"><div class="lead-ico">${icon('help')}</div><div><h3>How Neon Peach works</h3><p>Plug your bass into an audio interface. On the I/O page, pick the interface and the jack your bass is in. Build a chain on two paths. Save it as a preset. Then play it live with the footswitches.</p></div></div>
   <div class="feat">${HELP_FEAT.map(([c,t])=>`<div class="fcard" style="--c:${CAT_COLOR[c]}">${icon(CAT_ICON[c])}<b>${c}</b><span>${t}</span></div>`).join('')}</div>
   <div class="grid2"><section class="pane"><h4 class="pane-h">The three modes</h4><p><b class="t-cyan">Preset:</b> A goes back, B goes forward, C taps the tempo.</p><p><b class="t-pink">Scene:</b> A, B and C jump between scenes.</p><p><b class="t-peach">Stomp:</b> A, B and C flip the blocks you pick.</p><p>Hold C in any mode for the tuner. Hold B to record a loop.</p></section>
@@ -6353,7 +7401,7 @@ UI.appSet=null; if(window.npDesktop&&npDesktop.getSettings) npDesktop.getSetting
 function latencyPane(){ const L=latencyInfo(); if(!L) return ''; const win=IS_APP&&window.npDesktop&&npDesktop.platform==='win32', ex=UI.appSet&&UI.appSet.exclusiveAudio;
   const row=(l,v,em)=>`<div class="lrow"><span>${l}</span><b>${v.toFixed(1)} ms</b>${em?`<em>${em}</em>`:''}</div>`;
   return `<section class="pane span2 latpane"><h4 class="pane-h">${icon('clock')}Delay from string to speaker<em>Under 10 ms feels instant. Over 20 ms feels late.</em></h4>
-  <div class="lgrid"><div class="lrows">${L.measured?row('Interface, measured round trip',L.measured,'from the ping test'):row('Interface out',L.out,'reported by the system')+row('Interface in',L.inp,L.inpSaid?'reported by the system':'a guess. Run the ping test for the real number.')}${row('Neon Peach chain',L.chain,L.chain<1?'nothing to cut here':'drives add 0.4 ms each')}<div class="lrow tot"><span>Total</span><b>${(L.measured?L.measured+L.chain:L.total).toFixed(1)} ms</b></div></div>
+  <div class="lgrid"><div class="lrows">${L.measured?row('Interface, measured round trip',L.measured,'from the ping test'):row('Interface out',L.out,'reported by the system')+row('Interface in',L.inp,L.inpSaid?'reported by the system':'a guess. Run the ping test for the real number.')}${row('Neon Peach chain',L.chain,L.chain<1?'nothing to cut here':'drives add 0.4 ms each, Muff and Octave Fuzz 0.8')}<div class="lrow tot"><span>Total</span><b>${(L.measured?L.measured+L.chain:L.total).toFixed(1)} ms</b></div></div>
   <div class="ltips"><p><b>Cut the delay:</b> set your interface's buffer to 64 or 128 samples in its own control app. Set it to 48 kHz.</p>
   ${win?`<label class="tgl"><input type="checkbox" id="exclusive" ${ex?'checked':''}><span><b>Exclusive Windows audio</b> — Neon Peach takes over the output so Windows' mixer can't add its own buffer. Other apps go quiet while it runs. The app restarts to switch.</span></label>`:''}
   <div class="row wrap"><button class="sm ${UI.pinging?'rec':''}" id="pingbtn">${icon('waves')}${UI.pinging?'Listening…':'Measure it (ping test)'}</button><span class="dim">${esc(UI.pingMsg||'Patch an output into an input with a cable, then press. Or hold a mic near your speaker.')}</span></div></div></div></section>`; }

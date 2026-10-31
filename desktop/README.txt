@@ -14,6 +14,64 @@ HOW TO RUN
 No bass handy? Press "Hear it" on the Wizard page, or open Settings > Audio
 and press "Play the demo riff".
 
+NEW IN 2.4: THE PEDALS ARE REAL NOW
+Every original effect block was rebuilt as a model of a real pedal. The
+block names and knobs are the same, so your presets still load. They
+just sound like the real thing now. Each block got a Model or Circuit
+choice where the real pedals come in flavors. Both engines play every
+one of them the same (checked sample by sample).
+
+Drives
+- Microtubes B3K: CMOS inverter stages, Grunt and Attack before the clip.
+- Vintage Microtubes: new Era knob. 0 is modern and tight. 100 is dark
+  and squashy.
+- Alpha Crunch and Omega Growl: now the Alpha-Omega circuit. Mod blends
+  Alpha into Omega. Bite and Growl push highs and low mids into the clip.
+- Ignissor Fuzz: a germanium two-transistor fuzz. It cleans up when you
+  play softer. Bias starves it. Gate makes it spit.
+- Peach Overdrive: a Tube Screamer. The mid hump grows with Drive. Clip
+  picks the diodes: Silicon, Germanium, LED or Asymmetric.
+- Wavefolder: Folds, Symmetry and Shape, all anti-aliased.
+- Tube Preamp: a real 12AX7 stage. Grid conduction and bias shift make
+  it bloom and duck. Bias and Sag knobs.
+- Peach Muff: a Big Muff. Two diode stages and the Muff tone stack. Gate
+  for the sputter.
+- Octave Fuzz: an Octavia. The Octave knob sets how much octave you get.
+
+Dynamics and filters
+- Super Squeeze: Circuit picks OTA (Dyna Comp), Opto (LA-2A), FET (1176)
+  or VCA (clean, the old sound).
+- Peach Gate: NS-2 style. Close Below sets the hysteresis. Decay lets the
+  tail fade instead of cutting.
+- Brickwall: Hard or Soft knee.
+- Envelope Filter: Mutron style. Real resonance that sings at the top.
+  Gain drives the filter.
+- Pedal Wah: Cry Baby, Bass 105Q or Vox. Smooth with an expression pedal.
+- Multi Filter: SVF or a Moog ladder, with Drive.
+
+Modulation
+- Peach Chorus: bucket-brigade lines. CE-2, Dimension D or Tri-Chorus.
+- Flanger: Mistress, ADA or Through-Zero. Polarity flips the feedback.
+- Phaser: Phase 90, Small Stone (with Color) or Univibe.
+- Tremolo: Optical, Bias or Harmonic.
+- Vibrato: Rise makes the wobble fade in after each note.
+- Rotary Speaker: a real Leslie. Horn and drum ramp up and down at their
+  own speeds. Brake stops them. Mic Spread sets the width.
+- Ring Mod: four carrier waves and a Tone. Bit Crusher: a Filter switch
+  for clean lo-fi.
+
+Delay, reverb and pitch
+- Delay: Tape has wow, flutter, head bump and tape squash. Analog is a
+  real bucket-brigade chip that gets darker as the time gets longer.
+  Digital has a Lo-Fi knob. Ping Pong bounces for real. Age sets the
+  wear.
+- Multi-Tap: Even, Dotted, Triplet or Golden patterns.
+- Reverb: a real algorithmic reverb now, not a noise sample. Decay is the
+  true decay time. Spring is three springs with the boing.
+- Sub Octave: a Boss OC-2. It tracks a low E and fast lines, and the sub
+  follows your note's dynamics.
+- Pitch Shift and Harmonizer: a new shifter with far less warble.
+
 NEW IN 2.3: THE NEON 900 HEAD
 - A Darkglass-style bass amp in one block. Find it under Amp in the
   block picker. Four presets are in bank 6. The Wizard has two new styles:
@@ -168,16 +226,16 @@ WHERE THINGS ARE
 WHAT IT DOES
 - 2 signal paths. Parallel, crossover, series, or A only.
 - Up to 24 blocks. 57 block types.
-- Drives: B3K, Vintage, Alpha, Omega, Ignissor fuzz, overdrive, tube pre, wavefolder.
+- Drives: B3K, Vintage, Alpha, Omega, Ignissor fuzz, Tube Screamer, tube pre, wavefolder, Big Muff, Octavia.
 - The Neon 900 and Melted Raspberry heads (Darkglass-style), 8 classic amp heads, 8 cabs, 4 mic types, load your own .wav IRs.
 - Clone: copy any pedal or plugin. Load .nam files and .wav IRs. (See CLONE below.)
 - Tone Match: match a record you love with a 10-band EQ.
-- Compressor, gate, limiter. Parametric, graphic, 6-band EQ, cuts.
+- Compressor (OTA, Opto, FET, VCA), gate, limiter. Parametric, graphic, 6-band EQ, cuts.
 - Sub octave, pitch shift, harmonizer, Peach Synth (follows your notes).
-- Envelope filter, wah, multi filter.
-- Chorus, flanger, phaser, tremolo, vibrato, rotary, ring mod, bit crusher.
-- Delay (digital, tape, analog, ping pong, multi-tap) with tempo sync and trails.
-- Reverb (room, hall, plate, spring, cathedral, shimmer) with trails.
+- Envelope filter, wah (Cry Baby, 105Q, Vox), Moog ladder filter.
+- BBD chorus, BBD flanger, phaser, tremolo, vibrato, Leslie rotary, ring mod, bit crusher.
+- Delay (digital, tape, bucket-brigade analog, ping pong, multi-tap) with tempo sync and trails.
+- Algorithmic reverb (room, hall, plate, spring, cathedral, shimmer) with trails.
 - 3-minute stereo looper: dub, undo, reverse, half speed.
 - Tuner, tap tempo, room EQ, master limiter, meters.
 - 128 preset slots (16 banks x 8). 8 scenes per preset. Stomp macros.

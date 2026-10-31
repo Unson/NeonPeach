@@ -32,7 +32,7 @@ const SHOTS=path.resolve(__dirname,'shots'); fs.mkdirSync(SHOTS,{recursive:true}
   await page.evaluate(()=>showLibrary('A')); await page.waitForTimeout(200);
   ok(await page.evaluate(()=>{ const x=document.querySelector('.litem[data-lib="head"]'); return !!x && !!x.querySelector('.newtag'); }), 'picker lists the head as new');
   await page.fill('#libq','darkglass'); await page.waitForTimeout(150);
-  ok(await page.evaluate(()=>[...document.querySelectorAll('.litem')].filter(x=>x.style.display!=='none').map(x=>x.dataset.lib).join()==='head'), 'searching "darkglass" finds the head');
+  ok(await page.evaluate(()=>{ const f=[...document.querySelectorAll('.litem')].filter(x=>x.style.display!=='none').map(x=>x.dataset.lib); return f.includes('head') && f.includes('b3k'); }), 'searching "darkglass" finds the head and the B3K');
   await shot('picker'); await page.evaluate(()=>closeModal());
   // the Wizard builds the two new styles
   const wiz=await page.evaluate(()=>{ const out={}; for(const id of ['m900','ao900']){ UI.wiz.id=id; wizApply(false); out[id]=NP.paths.A.map(b=>b.type).join('>')+' head:'+(NP.paths.A.find(b=>b.type==='head')||{p:{}}).p.circuit; } return out; });

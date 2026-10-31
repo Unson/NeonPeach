@@ -103,7 +103,7 @@ function muffStage(){ return pdCurve(u=>u/Math.pow(1+Math.pow(Math.abs(u)/0.6,2.
 function muffSus(s){ return 0.02+Math.pow(s,1.3)*2.5; }
 function muffGains(p){ const m=pdMix(p,0.55), t=p.tone/100; m.gl=0.08+0.92*(1-t); m.gh=(0.08+0.92*t)*1.3; m.sg=muffSus(p.sustain/100); return m; }
 function muffGate(p){ return { threshold:-90+p.gate*0.72, attack:0.3, release:20, hold:3, range:-80 }; }
-def('muff', { name:'Peach Muff', cat:'Drive', color:'#f96', desc:'A Big Muff for bass. Two clipping stages, the scooped tone knob, a mids knob to put them back, and a sputtery gate.', lat:2*SHAPER_LAT,
+def('muff', { name:'Peach Muff', cat:'Drive', color:'#f96', desc:'A Big Muff fuzz for bass. Two clipping stages, the scooped tone knob, a mids knob to put them back, and a sputtery gate.', lat:2*SHAPER_LAT,
   params:{ sustain:P('Sustain',0,100,70,'%'), tone:P('Tone',0,100,50,'%'), mids:P('Mids',-12,12,0,'dB'), blend:P('Blend',0,100,70,'%'), level:P('Level',-24,24,0,'dB'), grunt:P('Grunt',30,300,60,'Hz'), gate:P('Gate',0,100,0,'%') },
   note(b){ return 'Tone goes dark to bright and scoops the mids in the middle. Mids puts them back.'+(b.p.gate>50 ? ' Gate is high: the tail of each note sputters and chops.' : b.p.gate>0 ? ' Gate cuts the tail of each note short.' : ''); },
   build(ctx,b){ const n=b.n,p=b.p; n.hp=pdBq(ctx,'highpass',p.grunt,0.7); n.gt=pdWorklet(ctx,'np-gate',muffGate(p)); n.sg=ctx.createGain(); n.lp1=pdBq(ctx,'lowpass',3000,-3); n.sh1=initCurve(shaperNode(ctx, muffStage()),'muff',0); n.dc1=pdBq(ctx,'highpass',12,0.5); n.cp=pdBq(ctx,'highpass',60,0.5); n.lp2=pdBq(ctx,'lowpass',2500,-3); n.sh2=initCurve(shaperNode(ctx, muffStage()),'muff',0); n.dc=pdBq(ctx,'highpass',12,0.5);
