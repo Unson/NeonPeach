@@ -15,7 +15,7 @@ const fonts=[
   face('NP Display','@fontsource/barlow-condensed/files/barlow-condensed-latin-700-normal.woff2','font-weight:651 900;font-style:normal;')
 ].join('\n');
 const namWasm=await wat2wasm(r('wasm/namkern.wat')), trainWasm=await wat2wasm(r('wasm/lstmtrain.wat'));
-const css=r('style.css').replace('/*FONTS*/', fonts), worklets=r('worklets.js')+'\n'+r('worklets2.js'), engine=r('engine.js')+'\n'+r('fx2.js')+'\n'+r('amp2.js'), namcore=r('namcore.js'), cloner=r('cloner.js'), ui=r('ui.js'), ui2=r('ui2.js'), ui3=r('ui3.js'), ui4=r('ui4.js'), ui5=r('ui5.js'), stretch=r('stretch.js'), nshim=r('nshim.js'), native=r('native.js'), desktop=r('desktop.js');
+const css=r('style.css').replace('/*FONTS*/', fonts), worklets=['worklets.js','worklets2.js','worklets_drive.js','worklets_dyn.js','worklets_mod.js','worklets_time.js'].map(r).join('\n'), engine=[r('engine.js'),r('fx2.js'),r('amp2.js'),r('pedals_drive.js'),r('pedals_dyn.js'),r('pedals_mod.js'),r('pedals_time.js')].join('\n'), namcore=r('namcore.js'), cloner=r('cloner.js'), ui=r('ui.js'), ui2=r('ui2.js'), ui3=r('ui3.js'), ui4=r('ui4.js'), ui5=r('ui5.js'), stretch=r('stretch.js'), nshim=r('nshim.js'), native=r('native.js'), desktop=r('desktop.js');
 for(const [n,s] of [['worklets',worklets],['engine',engine],['namcore',namcore],['cloner',cloner],['ui',ui],['ui2',ui2],['ui3',ui3],['ui4',ui4],['ui5',ui5],['stretch',stretch],['nshim',nshim],['native',native],['desktop',desktop]]){ if(/<\/script/i.test(s)) throw new Error(n+' contains </script'); }
 const kernels=`const NAM_WASM_B64='${namWasm.toString('base64')}', TRAIN_WASM_B64='${trainWasm.toString('base64')}';`;
 const POWER='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v8"/><path d="M6.6 6.6a7.6 7.6 0 1 0 10.8 0"/></svg>';

@@ -2,9 +2,9 @@
 // No browser needed. Run: node native/test/head.js
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const NAT = path.resolve(__dirname, '..'), NPDIR = path.resolve(NAT, '../app');
-const addon = require(path.join(NAT, 'build/linux-x64/npaudio.node')), makeNativeAudio = require(path.join(NAT, 'shim.js'));
-const wsrc = ['namcore.js', 'worklets.js', 'worklets2.js'].map(f => fs.readFileSync(path.join(NPDIR, f), 'utf8')).join('\n');
-const esrc = ['engine.js', 'fx2.js', 'amp2.js'].map(f => fs.readFileSync(path.join(NPDIR, f), 'utf8')).join('\n');
+const addon = require(process.env.NP_ADDON || path.join(NAT, 'build/linux-x64/npaudio.node')), makeNativeAudio = require(path.join(NAT, 'shim.js'));
+const wsrc = ['namcore.js', 'worklets.js', 'worklets2.js', 'worklets_drive.js', 'worklets_dyn.js', 'worklets_mod.js', 'worklets_time.js'].map(f => fs.readFileSync(path.join(NPDIR, f), 'utf8')).join('\n');
+const esrc = ['engine.js', 'fx2.js', 'amp2.js', 'pedals_drive.js', 'pedals_dyn.js', 'pedals_mod.js', 'pedals_time.js'].map(f => fs.readFileSync(path.join(NPDIR, f), 'utf8')).join('\n');
 const SR = 48000, N = SR*2;
 function signal(){ const x = new Float32Array(N); const notes = [[0, 55], [0.4, 82.4], [0.8, 110], [1.1, 41.2]];
   for(const [t0, f] of notes){ const i0 = Math.round(t0*SR); for(let i = i0; i < Math.min(N, i0 + SR*0.9); i++){ const t = (i - i0)/SR; let v = 0; for(let h = 1; h < 48; h++) v += Math.sin(2*Math.PI*f*h*t)/(h*0.9 + 0.1)*Math.exp(-t*h*0.12); x[i] += 0.35*v*Math.exp(-t*3)*Math.min(1, t*400); } }

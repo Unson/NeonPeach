@@ -22,6 +22,8 @@ struct Proc {
 };
 
 Proc* makeProc(const std::string& name);
+// 2.4 pedal models, one file per family (procs_drive.cpp, procs_dyn.cpp, procs_mod.cpp, procs_time.cpp). Each returns nullptr for a name it does not know.
+Proc* makeProcDrive(const std::string& name); Proc* makeProcDyn(const std::string& name); Proc* makeProcMod(const std::string& name); Proc* makeProcTime(const std::string& name);
 Proc* makeNamProc();
 
 } // namespace np

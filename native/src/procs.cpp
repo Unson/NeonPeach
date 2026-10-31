@@ -370,6 +370,7 @@ Proc* makeProc(const std::string& name){
   if(name == "np-comp") return new Comp(); if(name == "np-shaper") return new Shaper(); if(name == "np-limit") return new Limit();
   if(name == "np-revdelay") return new RevDelay(); if(name == "np-freeze") return new Freeze(); if(name == "np-vowel") return new Vowel();
   if(name == "np-stutter") return new Stutter(); if(name == "np-swell") return new Swell(); if(name == "np-nam") return makeNamProc();
+  { Proc* q; if((q = makeProcDrive(name))) return q; if((q = makeProcDyn(name))) return q; if((q = makeProcMod(name))) return q; if((q = makeProcTime(name))) return q; }
   return nullptr;
 }
 
