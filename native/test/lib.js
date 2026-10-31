@@ -25,8 +25,8 @@ function render(type, params, input, opts){ opts = opts || {}; input = input || 
   sb.AudioWorkletNode.prototype = sh.classes.NWorklet.prototype; sb.globalThis = sb; vm.createContext(sb); vm.runInContext(HARNESS, sb); const A = sb.__api; A.NP.ctx = ctx; A.NP.bpm = 120;
   const b = A.createBlock(type, params || {}); const src = ctx.createBufferSource(); const buf = ctx.createBuffer(1, N, SR); buf.getChannelData(0).set(input); src.buffer = buf; src.connect(b.input); b.output.connect(ctx.destination); src.start(0);
   sh.flush(); const L = new Float32Array(N), R = new Float32Array(N); const steps = (opts.steps || []).slice();
-  for(let off = 0; off < N; off += 4800){ while(steps.length && steps[0][0]*SR <= off){ const [, pp] = steps.shift(); Object.assign(b.p, pp); A.applyBlock(b); sh.flush(); }
-    const m = Math.min(4800, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); R.set(r[1], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
+  for(let off = 0; off < N; off += 4864){ while(steps.length && steps[0][0]*SR <= off){ const [, pp] = steps.shift(); Object.assign(b.p, pp); A.applyBlock(b); sh.flush(); }
+    const m = Math.min(4864, N - off); const r = eng.render(m, [], 128); L.set(r[0], off); R.set(r[1], off); const pk = eng.poll(); ctx._receive({frame: off + m, msgs: pk.msgs}); sh.flush(); }
   return opts.stereo ? [L, R] : L; }
 // peak, rms and NaN check, skipping the first `skip` seconds (default 0.1, the settle time)
 function stats(x, skip){ const s = Math.round((skip == null ? 0.1 : skip)*SR); let pk = 0, e = 0, nan = false; for(let i = s; i < x.length; i++){ const v = x[i]; if(!isFinite(v)) nan = true; pk = Math.max(pk, Math.abs(v)); e += v*v; } return {pk, rms: Math.sqrt(e/(x.length - s)), nan}; }
